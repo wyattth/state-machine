@@ -106,6 +106,8 @@ struct SubState : public Outer {
             ((Inner*)this)->entry();
         }
     }
+    
+    // Default entry/exit handers (do nothing unless non-virtually overridden)
     void entry() { }
     void exit() { }
 };
@@ -114,10 +116,6 @@ template<class Outer, class Inner, class R1, class R2>
 struct SubMachines : public Outer {
     R1* r1;
     R2* r2;
-    void setSubmachines(R1& a1, R2& a2) {
-        r1=&a1;
-        r2=&a2;
-    }
     void exitTo(typename Outer::State* s) {
         if (! dynamic_cast<Inner*>(s)) {
             r1->end();
@@ -218,6 +216,12 @@ struct MySystem : public System<MySystem, MyEvents> {
         void getMachines(Region21**a21, Region22**a22) {
             *a21 = &region->machine->r21;
             *a22 = &region->machine->r22;
+        }
+        void entry() {
+            std::cout << "D.entry()\n";
+        }
+        void exit() {
+            std::cout << "D.exit()\n";
         }
         void h() {
             std::cout << "D.h()\n";
