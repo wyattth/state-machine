@@ -92,20 +92,28 @@ struct System : public E {
 
 template<class Outer, class Inner>
 struct SubState : public Outer {
+    
     void exitTo(typename Outer::State* s) {
         if (! dynamic_cast<Inner*>(s)) {
+            ((Inner*)this)->exitInnerRegions();
             ((Inner*)this)->exit();
             std::cout << "Exit " << className<Inner>() << "\n";
             Outer::exitTo(s);
         }
     }
+    
     void enterFrom(typename Outer::State* s) {
         if (! dynamic_cast<Inner*>(s)) {
             Outer::enterFrom(s);
             std::cout << "Enter " << className<Inner>() << "\n";
             ((Inner*)this)->entry();
+            ((Inner*)this)->enterInnerRegions();
         }
     }
+    
+    // A normal substate has no inner regions, so nothing to do unless overridden
+    void exitInnerRegions() { }
+    void enterInnerRegions() { }
     
     // Default entry/exit handers (do nothing unless non-virtually overridden)
     void entry() { }
@@ -113,28 +121,10 @@ struct SubState : public Outer {
 };
 
 template<class Outer, class Inner, class R1, class R2>
-struct SubMachines : public Outer {
+struct SubMachines : public SubState<Outer,Inner> {
     R1* r1;
     R2* r2;
-    void exitTo(typename Outer::State* s) {
-        if (! dynamic_cast<Inner*>(s)) {
-            r1->end();
-            r2->end();
-            ((Inner*)this)->exit();
-            std::cout << "Exit " << className<Inner>() << "\n";
-            Outer::exitTo(s);
-        }
-    }
-    void enterFrom(typename Outer::State* s) {
-        if (! dynamic_cast<Inner*>(s)) {
-            Outer::enterFrom(s);
-            std::cout << "Enter " << className<Inner>() << "\n";
-            ((Inner*)this)->entry();
-            ((Inner*)this)->getMachines(&r1,&r2);
-            r1->start();
-            r2->start();
-        }
-    }
+    
     virtual void dispatch(void (Outer::EventTypes::*event)(), const char *name) {
         Outer::region->machine->accepted=2;
         r1->handle(event,name);
@@ -143,11 +133,16 @@ struct SubMachines : public Outer {
             (this->*event)();
         }
     }
-    void entry() {
-        std::cout << "Submachines entry\n";
+    
+    void exitInnerRegions() {
+        r1->end();
+        r2->end();
     }
-    void exit() {
-        std::cout << "Submachines exit\n";
+    
+    void enterInnerRegions() {
+        ((Inner*)this)->getMachines(&r1,&r2);
+        r1->start();
+        r2->start();
     }
 };
 
