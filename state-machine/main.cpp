@@ -81,7 +81,7 @@ struct System : public E {
         }
         void end() {
             std::cout << "  Transitioning out of "
-            << className<Region>() << std::endl;
+            << className<R>() << std::endl;
             machine->template doTransitionTo<State>();
             std::cout << " Ended " << className<R>() << std::endl;
         }
