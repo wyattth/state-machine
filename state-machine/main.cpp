@@ -27,11 +27,11 @@ template<class S, class E>
 struct System : public E {
     using Events = E;
 
-    int accepted;
-
     template<class R>
     struct Region {
         S *machine;
+        
+        bool handled;
         
         Region() : currentState(new State) {
             currentState->region = this;
@@ -42,7 +42,7 @@ struct System : public E {
             using RegionType = R;
             Region* region;
             void handle(void (Events::*event)(), const char *name) {
-                --region->machine->accepted;
+                region->handled = false;
                 std::cout << className<R>() << " ignores event " << name << "\n";
             }
             virtual void dispatch(void (Events::*event)(), const char *name) {
@@ -142,10 +142,11 @@ struct SubMachines : public SubState<Outer,Inner> {
     R2* r2;
     
     virtual void dispatch(void (Outer::EventTypes::*event)(), const char *name) {
-        Outer::region->machine->accepted=2;
+        r1->handled = true;
+        r2->handled = true;
         r1->handle(event,name);
         r2->handle(event,name);
-        if (Outer::region->machine->accepted == 0) {
+        if (!r1->handled && !r2->handled) {
             (this->*event)();
         }
     }
