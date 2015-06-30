@@ -33,13 +33,13 @@ struct System : public E {
     struct Region {
         S *machine;
         
-        Region(S *m) : machine(m), currentState(new State) {
+        Region() : currentState(new State) {
             currentState->region = this;
         }
         
         struct State : public Events {
             using EventTypes = Events;
-            using RegionType = Region;
+            using RegionType = R;
             Region* region;
             void handle(void (Events::*event)(), const char *name) {
                 --region->machine->accepted;
@@ -50,36 +50,49 @@ struct System : public E {
             }
             template<class D>
             void transitionTo() {
-                region->template transitionTo<D>();
+                region->machine->template transitionTo<D>();
             }
             virtual void exitTo(State* s) { }
             virtual void enterFrom(State* s) { }
         };
+        
+        template<class D>
+        D* setStateTo() {
+            currentState = new D;
+            currentState->region = this;
+            return (D*) currentState;
+        }
+        
         State *currentState = new State(this);
-        void start() {
-            transitionTo<typename R::InitialState>();
+        void start(S* m) {
+            machine = m;
+            currentState->region = this;
+            machine->template transitionTo<typename R::InitialState>();
         }
         void end() {
-            transitionTo<State>();
+            machine->template transitionTo<State>();
         }
         void handle(void (Events::*event)(), const char *name) {
             currentState->dispatch(event, name);
         }
-        template<class D>
-        void transitionTo() {
-            auto oldCurrentState = currentState;
-            std::cout << "Transitioning " << className<R>()
-            << " to state " << className<D>() << std::endl;
-            currentState = new D;
-            currentState->region = this;
-            oldCurrentState->template exitTo(currentState);
-            currentState->enterFrom(oldCurrentState);
-        }
     };
+
+    template<class D>
+    void transitionTo() {
+        auto newStateRegion = &(typename D::RegionType&)(*(S*)this);
+        auto oldCurrentState = newStateRegion->currentState;
+        D newCurrentState;
+        newCurrentState.region = newStateRegion;
+        std::cout
+            << "Transitioning " << className<typename D::RegionType>()
+            << " to state " << className<D>() << std::endl;
+        oldCurrentState->exitTo(&newCurrentState);
+        newCurrentState.enterFrom(oldCurrentState);
+    }
 
     void start() {
         std::cout << "Starting " << className<S>() << std::endl;
-        ((S*)this)->topLevel.start();
+        ((S*)this)->topLevel.start((S*)this);
     }
     void end() {
         ((S*)this)->topLevel.end();
@@ -92,22 +105,25 @@ struct System : public E {
 
 template<class Outer, class Inner>
 struct SubState : public Outer {
+    using State = typename Outer::State;
     
-    void exitTo(typename Outer::State* s) {
+    void exitTo(State* s) {
         if (! dynamic_cast<Inner*>(s)) {
             ((Inner*)this)->exitInnerRegions();
             ((Inner*)this)->exit();
             std::cout << "Exit " << className<Inner>() << "\n";
+            Outer::region->template setStateTo<Outer>();
             Outer::exitTo(s);
         }
     }
     
-    void enterFrom(typename Outer::State* s) {
+    void enterFrom(State* s) {
         if (! dynamic_cast<Inner*>(s)) {
             Outer::enterFrom(s);
             std::cout << "Enter " << className<Inner>() << "\n";
-            ((Inner*)this)->entry();
-            ((Inner*)this)->enterInnerRegions();
+            Inner* i = Outer::region->template setStateTo<Inner>();
+            i->entry();
+            i->enterInnerRegions();
         }
     }
     
@@ -141,8 +157,8 @@ struct SubMachines : public SubState<Outer,Inner> {
     
     void enterInnerRegions() {
         ((Inner*)this)->getMachines(&r1,&r2);
-        r1->start();
-        r2->start();
+        r1->start(Outer::region->machine);
+        r2->start(Outer::region->machine);
     }
 };
 
@@ -163,28 +179,29 @@ struct MySystem : public System<MySystem, MyEvents> {
     struct X;
     
     struct Region1 : public Region<Region1> {
-        using Region::Region;
         using InitialState = B;
-    } topLevel = this;
+    } topLevel;
     
     struct Region21 : public Region<Region21> {
-        using Region::Region;
         using InitialState = V;
-    } r21 = this;
+    } r21;
     
     struct Region22 : public Region<Region22> {
-        using Region::Region;
         using InitialState = X;
-    } r22 = this;
+    } r22;
     
     struct Region31 : public Region<Region31> {
-        using Region::Region;
-    } r31 = this;
+    } r31;
     
     struct Region32 : public Region<Region32> {
-        using Region::Region;
-    } r32 = this;
-
+    } r32;
+    
+    operator Region1&() { return topLevel; }
+    operator Region21&() { return r21; }
+    operator Region22&() { return r22; }
+    operator Region31&() { return r31; }
+    operator Region32&() { return r32; }
+    
     struct A : public SubState<Region1::State,A> {
         void entry() {
             std::cout << "A.entry()\n";
@@ -204,6 +221,7 @@ struct MySystem : public System<MySystem, MyEvents> {
     struct C : public SubState<Region1::State,C> {
         void k() {
             std::cout << "C.k()\n";
+            transitionTo<W>();
         }
     };
     
@@ -235,6 +253,12 @@ struct MySystem : public System<MySystem, MyEvents> {
         }
     };
     
+    struct W : public SubState<U,W> {
+        void g() {
+            std::cout << "W.g()\n";
+        }
+    };
+    
     struct X : public SubState<Region22::State,X> {
     };
 };
@@ -250,6 +274,7 @@ int main(int argc, const char * argv[]) {
     m.g();
     m.h();
     m.k();
+    m.g();
     
     m.end();
     
