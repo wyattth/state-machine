@@ -29,21 +29,22 @@ struct System : public E {
 
     template<class R>
     struct Region {
-        S *machine;
-        
-        bool handled;
-        
-        Region() : currentState(new State) {
-            currentState->region = this;
-        }
-        
-        struct State : public Events {
-            using EventTypes = Events;
+
+        struct State : public E {
+            using Events = E;
             using RegionType = R;
+            
             Region* region;
+            
+            void* operator new (size_t size, void *addr) {
+//                std::cout << "New " << size << " at " << addr << std::endl;
+                return addr;
+            }
+            
             void handle(void (Events::*event)(), const char *name) {
                 region->handled = false;
-                std::cout << className<R>() << " ignores event " << name << "\n";
+                std::cout << "    (" << className<R>()
+                    << " ignores event " << name << ")\n";
             }
             virtual void dispatch(void (Events::*event)(), const char *name) {
                 (this->*event)();
@@ -55,41 +56,59 @@ struct System : public E {
             virtual void exitTo(State* s) { }
             virtual void enterFrom(State* s) { }
         };
+
+        S      *machine;
+        bool    handled;
+        State   stateStorage;
+        State  *currentState = &stateStorage;
+        
+        Region() {
+            currentState->region = this;
+        }
         
         template<class D>
         D* setStateTo() {
-            currentState = new D;
+            currentState = new (&stateStorage) D;
             currentState->region = this;
             return (D*) currentState;
         }
         
-        State *currentState = new State(this);
         void start(S* m) {
+            std::cout << " Starting " << className<R>() << std::endl;
             machine = m;
             currentState->region = this;
             machine->template transitionTo<typename R::InitialState>();
         }
         void end() {
-            machine->template transitionTo<State>();
+            std::cout << "  Transitioning out of "
+            << className<Region>() << std::endl;
+            machine->template doTransitionTo<State>();
+            std::cout << " Ended " << className<R>() << std::endl;
         }
         void handle(void (Events::*event)(), const char *name) {
+            std::cout << "  " << className<R>() << "." << name << "()" << std::endl;
             currentState->dispatch(event, name);
         }
     };
 
     template<class D>
-    void transitionTo() {
+    void doTransitionTo() {
         auto newStateRegion = &(typename D::RegionType&)(*(S*)this);
         auto oldCurrentState = newStateRegion->currentState;
         D newCurrentState;
         newCurrentState.region = newStateRegion;
-        std::cout
-            << "Transitioning " << className<typename D::RegionType>()
-            << " to state " << className<D>() << std::endl;
         oldCurrentState->exitTo(&newCurrentState);
         newCurrentState.enterFrom(oldCurrentState);
     }
 
+    template<class D>
+    void transitionTo() {
+        std::cout
+        << "  Transitioning " << className<typename D::RegionType>()
+        << " to state " << className<D>() << std::endl;
+        doTransitionTo<D>();
+    }
+    
     void start() {
         std::cout << "Starting " << className<S>() << std::endl;
         ((S*)this)->topLevel.start((S*)this);
@@ -111,7 +130,7 @@ struct SubState : public Outer {
         if (! dynamic_cast<Inner*>(s)) {
             ((Inner*)this)->exitInnerRegions();
             ((Inner*)this)->exit();
-            std::cout << "Exit " << className<Inner>() << "\n";
+            std::cout << "   Exited " << className<Inner>() << "\n";
             Outer::region->template setStateTo<Outer>();
             Outer::exitTo(s);
         }
@@ -120,7 +139,7 @@ struct SubState : public Outer {
     void enterFrom(State* s) {
         if (! dynamic_cast<Inner*>(s)) {
             Outer::enterFrom(s);
-            std::cout << "Enter " << className<Inner>() << "\n";
+            std::cout << "   Entering " << className<Inner>() << "\n";
             Inner* i = Outer::region->template setStateTo<Inner>();
             i->entry();
             i->enterInnerRegions();
@@ -138,28 +157,30 @@ struct SubState : public Outer {
 
 template<class Outer, class Inner, class R1, class R2>
 struct SubMachines : public SubState<Outer,Inner> {
-    R1* r1;
-    R2* r2;
+
+    template<class R>
+    R& innerRegion() const { return (R&)(*Outer::region->machine); }
     
-    virtual void dispatch(void (Outer::EventTypes::*event)(), const char *name) {
-        r1->handled = true;
-        r2->handled = true;
-        r1->handle(event,name);
-        r2->handle(event,name);
-        if (!r1->handled && !r2->handled) {
+    virtual void dispatch(void (Outer::Events::*event)(), const char *name) {
+        auto& r1 = innerRegion<R1&>();
+        auto& r2 = innerRegion<R2&>();
+        r1.handled = true;
+        r2.handled = true;
+        r1.handle(event,name);
+        r2.handle(event,name);
+        if ( !r1.handled && !r2.handled ) {
             (this->*event)();
         }
     }
     
     void exitInnerRegions() {
-        r1->end();
-        r2->end();
+        innerRegion<R1&>().end();
+        innerRegion<R2&>().end();
     }
     
     void enterInnerRegions() {
-        ((Inner*)this)->getMachines(&r1,&r2);
-        r1->start(Outer::region->machine);
-        r2->start(Outer::region->machine);
+        innerRegion<R1&>().start(Outer::region->machine);
+        innerRegion<R2&>().start(Outer::region->machine);
     }
 };
 
@@ -227,10 +248,6 @@ struct MySystem : public System<MySystem, MyEvents> {
     };
     
     struct D : public SubMachines<C,D,Region21,Region22> {
-        void getMachines(Region21**a21, Region22**a22) {
-            *a21 = &region->machine->r21;
-            *a22 = &region->machine->r22;
-        }
         void entry() {
             std::cout << "D.entry()\n";
         }
