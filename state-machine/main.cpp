@@ -33,7 +33,7 @@ struct System : public E {
         struct State : public E {
             using Events = E;
             using RegionType = R;
-            
+
             Region* region;
             
             void handle(void (Events::*event)(), const char *name) {
@@ -154,7 +154,7 @@ template<class Outer, class Inner, class R1, class R2>
 struct SubMachines : public SubState<Outer,Inner> {
 
     template<class R>
-    R& innerRegion() const { return (R&)(*Outer::region->machine); }
+    R& innerRegion() const { return static_cast<R&>(*Outer::region->machine); }
     
     virtual void dispatch(void (Outer::Events::*event)(), const char *name) {
         auto& r1 = innerRegion<R1&>();
