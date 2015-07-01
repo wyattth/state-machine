@@ -36,11 +36,6 @@ struct System : public E {
             
             Region* region;
             
-            void* operator new (size_t size, void *addr) {
-//                std::cout << "New " << size << " at " << addr << std::endl;
-                return addr;
-            }
-            
             void handle(void (Events::*event)(), const char *name) {
                 region->handled = false;
                 std::cout << "    (" << className<R>()
