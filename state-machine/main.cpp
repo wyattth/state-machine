@@ -198,27 +198,27 @@ struct MySystem : public System<MySystem, MyEvents> {
     struct Region1 : public Region<Region1> {
         using InitialState = B;
     } topLevel;
+    operator Region1&() { return topLevel; }
     
     struct Region21 : public Region<Region21> {
         using InitialState = V;
     } r21;
+    operator Region21&() { return r21; }
     
     struct Region22 : public Region<Region22> {
         using InitialState = X;
     } r22;
+    operator Region22&() { return r22; }
     
     struct Region31 : public Region<Region31> {
     } r31;
+    operator Region31&() { return r31; }
     
     struct Region32 : public Region<Region32> {
     } r32;
-    
-    operator Region1&() { return topLevel; }
-    operator Region21&() { return r21; }
-    operator Region22&() { return r22; }
-    operator Region31&() { return r31; }
     operator Region32&() { return r32; }
-    
+
+
     struct A : public SubState<Region1::State,A> {
         void entry() {
             std::cout << "A.entry()\n";
