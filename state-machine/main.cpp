@@ -24,7 +24,7 @@ struct EventList {
 };
 
 template<class S, class E>
-struct System : public E {
+struct StateMachine : public E {
     using Events = E;
 
     template<class R>
@@ -63,9 +63,7 @@ struct System : public E {
         
         template<class D>
         D* setStateTo() {
-            currentState = new (&stateStorage) D;
-            currentState->region = this;
-            return (D*) currentState;
+            return new (&stateStorage) D;
         }
         
         void start(S* m) {
@@ -86,34 +84,39 @@ struct System : public E {
         }
     };
 
-    template<class D>
+    S& system() {
+        return *static_cast<S*>(this);
+    }
+    
+    template<class DestinationStateType>
     void doTransitionTo() {
-        auto newStateRegion = &(typename D::RegionType&)(*(S*)this);
+        using RegionType = typename DestinationStateType::RegionType;
+        auto newStateRegion = & static_cast<RegionType&>(system());
         auto oldCurrentState = newStateRegion->currentState;
-        D newCurrentState;
+        DestinationStateType newCurrentState;
         newCurrentState.region = newStateRegion;
         oldCurrentState->exitTo(&newCurrentState);
         newCurrentState.enterFrom(oldCurrentState);
     }
 
-    template<class D>
+    template<class DestinationStateType>
     void transitionTo() {
-        std::cout
-        << "  Transitioning " << className<typename D::RegionType>()
-        << " to state " << className<D>() << std::endl;
-        doTransitionTo<D>();
+        std::cout << "  Transitioning "
+        << className<typename DestinationStateType::RegionType>()
+        << " to state " << className<DestinationStateType>() << std::endl;
+        doTransitionTo<DestinationStateType>();
     }
     
     void start() {
         std::cout << "Starting " << className<S>() << std::endl;
-        ((S*)this)->topLevel.start((S*)this);
+        system().topLevel.start((S*)this);
     }
     void end() {
-        ((S*)this)->topLevel.end();
+        system().topLevel.end();
         std::cout << "Ended " << className<S>() << std::endl;
     }
-    void handle(void (E::*event)(), const char *name) {
-        ((S*)this)->topLevel.handle(event, name);
+    void handle(void (E::*event)(), const char *name) final {
+        system().topLevel.handle(event, name);
     }
 };
 
@@ -156,7 +159,7 @@ struct SubMachines : public SubState<Outer,Inner> {
     template<class R>
     R& innerRegion() const { return static_cast<R&>(*Outer::region->machine); }
     
-    virtual void dispatch(void (Outer::Events::*event)(), const char *name) {
+    void dispatch(void (Outer::Events::*event)(), const char *name) override {
         auto& r1 = innerRegion<R1&>();
         auto& r2 = innerRegion<R2&>();
         r1.handled = true;
@@ -188,7 +191,7 @@ struct MyEvents : public EventList<MyEvents> {
     virtual void k() { handle(&MyEvents::k, __FUNCTION__); }
 };
 
-struct MySystem : public System<MySystem, MyEvents> {
+struct MyStateMachine : public StateMachine<MyStateMachine, MyEvents> {
     
     // Forward declarations for initial states
     struct B;
@@ -277,7 +280,7 @@ struct MySystem : public System<MySystem, MyEvents> {
 };
 
 int main(int argc, const char * argv[]) {
-    MySystem  m;
+    MyStateMachine  m;
     
     m.start();
     
