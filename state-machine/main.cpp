@@ -63,7 +63,7 @@ struct StateMachine : public E {
         
         template<class D>
         D* setStateTo() {
-            return new (&stateStorage) D;
+            return new (& stateStorage) D;
         }
         
         void start(S* m) {
