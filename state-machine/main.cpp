@@ -50,6 +50,11 @@ struct StateMachine : public E {
             }
             virtual void exitTo(State* s) { }
             virtual void enterFrom(State* s) { }
+            
+            S& machine() {
+                return (*region->machine);
+            }
+
         };
 
         S      *machine;
