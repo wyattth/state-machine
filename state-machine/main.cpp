@@ -9,6 +9,7 @@
 #include <iostream>
 #include <cxxabi.h>  // demangle class names in logs
 
+// Class Names
 std::string typeName(const std::type_info& typeInfo) {
     int status;
     char* name = abi::__cxa_demangle(typeInfo.name(), NULL, NULL, &status);
@@ -22,22 +23,80 @@ template<typename C> std::string className(C& obj) { return typeName(typeid(obj)
 class sm {
     
     template<typename P, typename C> class SubState_;
+
+    // Event functors to pass around (which embed event name and arguement values)
+    template<typename E>
+    struct Event {
+        const char *name;
+        Event(const char *name) : name(name) {}
+        virtual void operator()(E*) const = 0;
+    };
+    
+    template<typename E, void (E::*event)()>
+    struct EventWithoutArgs : Event<E> {
+        EventWithoutArgs(const char *name) : Event<E>(name) { }
+        void operator()(E *target) const { (target->*event)(); }
+    };
+    
+    template<typename E>
+    struct EventWithoutArgs2 : Event<E> {
+        void (E::*event)();
+        EventWithoutArgs2(void (E::*event)(), const char *name)
+        : Event<E>(name), event(event) { }
+        void operator()(E *target) const { (target->*event)(); }
+    };
+    
+    template<typename E, typename A1, void (E::*event)(A1)>
+    struct EventWith1Arg : Event<E> {
+        A1 a1;
+        EventWith1Arg(A1 a1, const char *name)
+        : Event<E>(name), a1(a1) { }
+        void operator()(E *target) const { (target->*event)(a1); }
+    };
+    
+    template<typename E, typename A1>
+    struct EventWith1Arg2 : Event<E> {
+        A1 a1;
+        void (E::*event)(A1);
+        EventWith1Arg2(void (E::*event)(A1), A1 a1, const char *name)
+        : Event<E>(name), event(event), a1(a1) { }
+        void operator()(E *target) const { (target->*event)(a1); }
+    };
+    
+    template<typename E, typename A1, typename A2, void (E::*event)(A1, A2)>
+    struct EventWith2Args : Event<E> {
+        A1 a1;
+        A1 a2;
+        EventWith2Args(A1 a1, A2 a2, const char *name)
+        : Event<E>(name), a1(a1), a2(a2) { }
+        void operator()(E *target) const { (target->*event)(a1,a2); }
+    };
+    
+    template<typename E, typename A1, typename A2>
+    struct EventWith2Args2 : Event<E> {
+        A1 a1;
+        A2 a2;
+        void (E::*event)(A1, A2);
+        EventWith2Args2(void (E::*event)(A1,A2), A1 a1, A2 a2, const char *name)
+        : Event<E>(name), event(event), a1(a1), a2(a2) { }
+        void operator()(E *target) const { (target->*event)(a1,a2); }
+    };
     
     template<typename M, typename E>
     struct TopState_ : E {
         using MachineType = M;
-        using Events      = E;
         using State       = TopState_;
+        using Event       = const Event<E>;
         
         State* self = this;
         M*     machine;
         bool   ignored;
         
-        virtual void dispatch( void (E::*event)(), const char *eventName ) {
-            (this->*event)();
+        virtual void dispatch( Event& event ) {
+            event(this);
         }
-        virtual void handle( void (Events::*event)(), const char *eventName ) {
-            std::cout << "Ignore event " << eventName << std::endl;
+        virtual void handle( Event& event ) {
+            std::cout << "Ignore event " << event.name << std::endl;
         }
         TopState_(M& m) : machine(&m) { }
         TopState_() { }
@@ -56,8 +115,9 @@ class sm {
     
     template<typename P, typename C, typename M, typename State, State M::* r>
     struct Region_ : State {
-        using E = typename State::Events;
-        template<typename GC> using SubState = SubState_<C,GC>;
+        template<typename GC>
+        using SubState  = SubState_<C,GC>;
+        using Event     = typename State::Event;
         
         static void enter(M& m, bool deep) {
             if (deep) {
@@ -73,9 +133,9 @@ class sm {
         static State*& currentState(M& m) {
             return (m.*r).self;
         }
-        virtual void handle( void (E::*event)(), const char *eventName ) override {
+        virtual void handle( Event& event ) override {
             this->ignored = true;
-            std::cout << "Event " << eventName << "() "
+            std::cout << "Event " << event.name << "() "
             "ignored by region " << className<C>() << std::endl;
         }
     };
@@ -84,7 +144,7 @@ class sm {
     struct ParallelState_ : P::template SubState<C> {
         using State  = typename P::State;
         using M      = typename P::MachineType;
-        using E      = typename P::Events;
+        using Event  = typename P::Event;
         template<typename GC, State M::*r>
         using Region = sm::Region_<C,GC,M,State,r>;
 
@@ -93,11 +153,11 @@ class sm {
             C::enter(m,deep);
         }
         
-        void dispatchToRegions( void (E::*event)(), const char *eventName ) {
+        void dispatchToRegions( Event& event ) {
             if (this->ignored) {
-                std::cout << "Event " << eventName << "() was ignored by "
+                std::cout << "Event " << event.name << "() was ignored by "
                 "all subregions of " << className<C>() << std::endl;
-                P::dispatch(event, eventName);
+                P::dispatch(event);
             }
         }
     };
@@ -106,7 +166,7 @@ class sm {
     struct ParallelState_<P,C,R,RR...> : ParallelState_<P,C,RR...> {
         using super = ParallelState_<P,C,RR...>;
         using M     = typename P::MachineType;
-        using E     = typename P::Events;
+        using Event = typename P::Event;
         using State = typename P::State;
         
         template<typename RegionBeingEntered>
@@ -124,16 +184,16 @@ class sm {
                 super::leave(s, deep);
             }
         }
-        void dispatchToRegions( void (E::*event)(), const char *eventName ) {
+        void dispatchToRegions( Event& event ) {
             auto* subState = R::currentState(*this->machine);
             subState->ignored = false;
-            (subState->*event)();
+            event(subState);
             this->ignored &= subState->ignored;
-            super::dispatchToRegions(event, eventName);
+            super::dispatchToRegions(event);
         }
-        virtual void dispatch( void (E::*event)(), const char *eventName ) override {
+        virtual void dispatch( Event& event ) override {
             this->ignored = true;
-            dispatchToRegions(event,eventName);
+            dispatchToRegions(event);
         }
     };
     
@@ -193,8 +253,8 @@ class sm {
         void stop() {
             topState.self->leave(BaseState(), true);
         }
-        void handle( void (E::*event)(), const char *eventName ) {
-            topState.self->dispatch(event, eventName);
+        void handle( const Event<E>& f ) {
+            topState.self->dispatch(f);
         }
         operator M&() {
             return *static_cast<M*>(this);
@@ -203,12 +263,35 @@ class sm {
         template<typename S>
         using TopState = SubState_<BaseState,S>;
     };
-    
+
 public:
     template<typename E>
     class EventList {
     protected:
-        virtual void handle( void (E::*event)(), const char *eventName ) = 0;
+        template<void (E::*event)()>
+        void handle(const char *name) {
+            handle(EventWithoutArgs<E,event>(name));
+        }
+        void handle(void (E::*event)(), const char *name) {
+            handle(EventWithoutArgs2<E>(event, name));
+        }
+        template<typename A1, void (E::*event)(A1)>
+        void handle(A1 a1, const char *name) {
+            handle(EventWith1Arg<E,A1,event>(a1,name));
+        }
+        template<typename A1>
+        void handle(void (E::*event)(A1), A1 a1, const char *name) {
+            handle(EventWith1Arg2<E,A1>(event, a1, name));
+        }
+        template<typename A1, typename A2, void (E::*event)(A1)>
+        void handle(A1 a1, A2 a2, const char *name) {
+            handle(EventWith2Args<E,A1,A2,event>(a1,a2,name));
+        }
+        template<typename A1, typename A2>
+        void handle(void (E::*event)(A1,A2), A1 a1, A2 a2, const char *name) {
+            handle(EventWith2Args2<E,A1,A2>(event, a1, a2, name));
+        }
+        virtual void handle( const Event<E>& f ) = 0;
     public:
         template<typename M>
         using Machine = Machine_<M,E>;
@@ -217,8 +300,9 @@ public:
 
 struct MyEvents : sm::EventList<MyEvents> {
     virtual void f() { handle(&MyEvents::f, __func__); }
-    virtual void g() { handle(&MyEvents::g, __func__); }
-    virtual void h() { handle(&MyEvents::h, __func__); }
+    virtual void g() { handle<&MyEvents::g>(__func__); }
+    virtual void h(int x) { handle(&MyEvents::h, x, __func__); }
+    virtual void j(int x) { handle<int,&MyEvents::j>(x, __func__); }
 };
 
 struct MyMachine : MyEvents::Machine<MyMachine> {
@@ -226,22 +310,25 @@ struct MyMachine : MyEvents::Machine<MyMachine> {
     State s2 { *this };
     
     struct A : TopState<A> {
-        void f() {
+        void f() override {
             std::cout << "A::f()\n";
             transitionTo<D>();
         }
     };
     struct B : A::SubState<B> {
-        void g() { std::cout << "B::g()\n"; }
+        void g() override {
+            std::cout << "B::g()\n";
+        }
     };
     struct C : A::SubState<C> {
     };
     struct D : C::SubState<D> {
-        void f() {
+        void f() override {
             std::cout << "D::f()\n";
             transitionTo<A>();
         }
-        void h() {
+        void h(int x) override {
+            std::cout << "Got h(" << x << ")\n";
             transitionTo<G>();
         }
         void entry() { std::cout << "D::in()\n"; }
@@ -260,10 +347,10 @@ struct MyMachine : MyEvents::Machine<MyMachine> {
         using InitialState = H;
     };
     struct G : R1::SubState<G> {
-        void f() {
+        void f() override {
             std::cout << "G::f()\n";
         }
-        void g() {
+        void g() override {
             transitionTo<D>();
         }
     };
@@ -278,11 +365,11 @@ int main(int argc, const char * argv[]) {
     m.start();
     m.f();
     m.g();
-    m.h();
+    m.h(2);
     m.f();
-    m.h();
+    m.h(3);
     m.g();
-    m.h();
+    m.h(4);
     std::cout << "Stop\n";
     m.stop();
     
