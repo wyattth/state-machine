@@ -9,290 +9,269 @@
 #include <iostream>
 #include <cxxabi.h>  // demangle class names in logs
 
-template<class Class>
-std::string className() {
+std::string typeName(const std::type_info& typeInfo) {
     int status;
-    char *name = abi::__cxa_demangle(typeid(Class).name(), NULL, NULL, &status);
+    char* name = abi::__cxa_demangle(typeInfo.name(), NULL, NULL, &status);
     std::string result = name;
     free(name);
     return result;
 }
+template<typename C> std::string className() { return typeName(typeid(C)); }
+template<typename C> std::string className(C& obj) { return typeName(typeid(obj)); }
 
-template<class E>
-struct EventList {
-    virtual void handle(void (E::*event)(), const char *name) = 0;
-};
-
-template<class S, class E>
-struct StateMachine : public E {
-    using Events = E;
-
-    template<class R>
-    struct Region {
-
-        struct State : public E {
-            using Events = E;
-            using RegionType = R;
-
-            Region* region;
-            
-            void handle(void (Events::*event)(), const char *name) {
-                region->handled = false;
-                std::cout << "    (" << className<R>()
-                    << " ignores event " << name << ")\n";
-            }
-            virtual void dispatch(void (Events::*event)(), const char *name) {
-                (this->*event)();
-            }
-            template<class D>
-            void transitionTo() {
-                region->machine->template transitionTo<D>();
-            }
-            virtual void exitTo(State* s) { }
-            virtual void enterFrom(State* s) { }
-        };
-
-        S      *machine;
-        bool    handled;
-        State   stateStorage;
-        State  *currentState = &stateStorage;
+namespace sm {
+    
+    template<typename P, typename C> struct SubState_;
+    
+    template<typename M, typename E>
+    struct TopState_ : E {
+        using MachineType = M;
+        using Events      = E;
+        using State       = TopState_;
         
-        Region() {
-            currentState->region = this;
-        }
+        State* self = this;
+        M*     machine;
+        bool   ignored;
         
-        template<class D>
-        D* setStateTo() {
-            return new (& stateStorage) D;
-        }
-        
-        void start(S* m) {
-            std::cout << " Starting " << className<R>() << std::endl;
-            machine = m;
-            currentState->region = this;
-            machine->template transitionTo<typename R::InitialState>();
-        }
-        void end() {
-            std::cout << "  Transitioning out of "
-            << className<R>() << std::endl;
-            machine->template doTransitionTo<State>();
-            std::cout << " Ended " << className<R>() << std::endl;
-        }
-        void handle(void (Events::*event)(), const char *name) {
-            std::cout << "  " << className<R>() << "." << name << "()" << std::endl;
-            currentState->dispatch(event, name);
-        }
-    };
-
-    S& system() {
-        return *static_cast<S*>(this);
-    }
-    
-    template<class DestinationStateType>
-    void doTransitionTo() {
-        using RegionType = typename DestinationStateType::RegionType;
-        auto newStateRegion = & static_cast<RegionType&>(system());
-        auto oldCurrentState = newStateRegion->currentState;
-        DestinationStateType newCurrentState;
-        newCurrentState.region = newStateRegion;
-        oldCurrentState->exitTo(&newCurrentState);
-        newCurrentState.enterFrom(oldCurrentState);
-    }
-
-    template<class DestinationStateType>
-    void transitionTo() {
-        std::cout << "  Transitioning "
-        << className<typename DestinationStateType::RegionType>()
-        << " to state " << className<DestinationStateType>() << std::endl;
-        doTransitionTo<DestinationStateType>();
-    }
-    
-    void start() {
-        std::cout << "Starting " << className<S>() << std::endl;
-        system().topLevel.start((S*)this);
-    }
-    void end() {
-        system().topLevel.end();
-        std::cout << "Ended " << className<S>() << std::endl;
-    }
-    void handle(void (E::*event)(), const char *name) final {
-        system().topLevel.handle(event, name);
-    }
-};
-
-template<class Outer, class Inner>
-struct SubState : public Outer {
-    using State = typename Outer::State;
-    
-    void exitTo(State* s) {
-        if (! dynamic_cast<Inner*>(s)) {
-            ((Inner*)this)->exitInnerRegions();
-            ((Inner*)this)->exit();
-            std::cout << "   Exited " << className<Inner>() << "\n";
-            Outer::region->template setStateTo<Outer>();
-            Outer::exitTo(s);
-        }
-    }
-    
-    void enterFrom(State* s) {
-        if (! dynamic_cast<Inner*>(s)) {
-            Outer::enterFrom(s);
-            std::cout << "   Entering " << className<Inner>() << "\n";
-            Inner* i = Outer::region->template setStateTo<Inner>();
-            i->entry();
-            i->enterInnerRegions();
-        }
-    }
-    
-    // A normal substate has no inner regions, so nothing to do unless overridden
-    void exitInnerRegions() { }
-    void enterInnerRegions() { }
-    
-    // Default entry/exit handers (do nothing unless non-virtually overridden)
-    void entry() { }
-    void exit() { }
-};
-
-template<class Outer, class Inner, class R1, class R2>
-struct SubMachines : public SubState<Outer,Inner> {
-
-    template<class R>
-    R& innerRegion() const { return static_cast<R&>(*Outer::region->machine); }
-    
-    void dispatch(void (Outer::Events::*event)(), const char *name) override {
-        auto& r1 = innerRegion<R1&>();
-        auto& r2 = innerRegion<R2&>();
-        r1.handled = true;
-        r2.handled = true;
-        r1.handle(event,name);
-        r2.handle(event,name);
-        if ( !r1.handled && !r2.handled ) {
+        virtual void dispatch( void (E::*event)(), const char *eventName ) {
             (this->*event)();
         }
-    }
-    
-    void exitInnerRegions() {
-        innerRegion<R1&>().end();
-        innerRegion<R2&>().end();
-    }
-    
-    void enterInnerRegions() {
-        innerRegion<R1&>().start(Outer::region->machine);
-        innerRegion<R2&>().start(Outer::region->machine);
-    }
-};
-
-// -------------------------------------------------------------------------
-
-struct MyEvents : public EventList<MyEvents> {
-    virtual void f() { handle(&MyEvents::f, __FUNCTION__); }
-    virtual void g() { handle(&MyEvents::g, __FUNCTION__); }
-    virtual void h() { handle(&MyEvents::h, __FUNCTION__); }
-    virtual void k() { handle(&MyEvents::k, __FUNCTION__); }
-};
-
-struct MyStateMachine : public StateMachine<MyStateMachine, MyEvents> {
-    
-    // Forward declarations for initial states
-    struct B;
-    struct V;
-    struct X;
-    
-    struct Region1 : public Region<Region1> {
-        using InitialState = B;
-    } topLevel;
-    operator Region1&() { return topLevel; }
-    
-    struct Region21 : public Region<Region21> {
-        using InitialState = V;
-    } r21;
-    operator Region21&() { return r21; }
-    
-    struct Region22 : public Region<Region22> {
-        using InitialState = X;
-    } r22;
-    operator Region22&() { return r22; }
-    
-    struct Region31 : public Region<Region31> {
-    } r31;
-    operator Region31&() { return r31; }
-    
-    struct Region32 : public Region<Region32> {
-    } r32;
-    operator Region32&() { return r32; }
-
-
-    struct A : public SubState<Region1::State,A> {
-        void entry() {
-            std::cout << "A.entry()\n";
+        virtual void handle( void (Events::*event)(), const char *eventName ) {
+            std::cout << "Ignore event " << eventName << std::endl;
         }
-        void f() {
-            std::cout << "A.f()\n";
+        TopState_(M& m) : machine(&m) { }
+        TopState_() { }
+        
+        template<typename D>
+        void transitionTo() {
+            leave(D(), true);
+            D::enter(*machine, true);
+        }
+        static State*& currentState(M& m) {
+            return m.topState.self;
+        }
+        static void enter(M&, bool) { }
+        virtual void leave(const State&, bool) { }
+    };
+    
+    template<typename P, typename C, typename M, typename State, State M::* r>
+    struct Region_ : State {
+        using E = typename State::Events;
+        template<typename GC> using SubState = SubState_<C,GC>;
+        
+        static void enter(M& m, bool deep) {
+            if (deep) {
+                P::template enterInnerRegions<C>(m, deep);
+            }
+        }
+        virtual void leave(const State& s, bool deep) override {
+            if (deep) {
+                std::cout << "Leave all regions parallel to " << className<C>() <<"\n";
+                ((P*)P::currentState(*this->machine))->leave(s, deep);
+            }
+        }
+        static State*& currentState(M& m) {
+            return (m.*r).self;
+        }
+        virtual void handle( void (E::*event)(), const char *eventName ) override {
+            this->ignored = true;
+            std::cout << "Event " << eventName << "() "
+            "ignored by region " << className<C>() << std::endl;
         }
     };
     
-    struct B : public SubState<A,B> {
-        void g() {
-            std::cout << "B.g()\n";
+    template<typename P, typename C, typename... RR>
+    struct ParallelState_ : P::template SubState<C> {
+        using State  = typename P::State;
+        using M      = typename P::MachineType;
+        using E      = typename P::Events;
+        template<typename GC, State M::*r>
+        using Region = sm::Region_<C,GC,M,State,r>;
+        
+        template<typename RegionBeingEntered>
+        static void enterInnerRegions(M& m, bool deep) {
+            C::enter(m,deep);
+        }
+        
+        void dispatchToRegions( void (E::*event)(), const char *eventName ) {
+            if (this->ignored) {
+                std::cout << "Event " << eventName << "() was ignored by "
+                "all subregions of " << className<C>() << std::endl;
+                P::dispatch(event, eventName);
+            }
+        }
+    };
+    
+    template<typename P, typename C, typename R, typename... RR>
+    struct ParallelState_<P,C,R,RR...> : ParallelState_<P,C,RR...> {
+        using super = ParallelState_<P,C,RR...>;
+        using M     = typename P::MachineType;
+        using E     = typename P::Events;
+        using State = typename P::State;
+        
+        template<typename RegionBeingEntered>
+        static void enterInnerRegions(M& m, bool deep) {
+            super::template enterInnerRegions<RegionBeingEntered>(m, deep);
+            if ( ! std::is_same<R, RegionBeingEntered>() ) {
+                std::cout << "Start region " << className<R>() << std::endl;
+                R::InitialState::enter(m,false);
+            }
+        }
+        virtual void leave(const State& s, bool deep) override {
+            std::cout << "Stop region1 " << className<R>() << std::endl;
+            R::currentState(*this->machine)->leave(s, false);
+            if (deep)
+                super::leave(s, deep);
+        }
+        void dispatchToRegions( void (E::*event)(), const char *eventName ) {
+            auto* subState = R::currentState(*this->machine);
+            subState->ignored = false;
+            (subState->*event)();
+            this->ignored &= subState->ignored;
+            super::dispatchToRegions(event, eventName);
+        }
+        virtual void dispatch( void (E::*event)(), const char *eventName ) override {
+            this->ignored = true;
+            dispatchToRegions(event,eventName);
+        }
+    };
+    
+    template<typename Parent, typename Child>
+    struct SubState_ : Parent {
+        using State = typename Parent::State;
+        
+        virtual void leave(const State& target, bool deep) {
+            if ( ! dynamic_cast<const Child*>(&target) ) {
+                std::cout << "Exit " << className<Child>() << "\n";
+                static_cast<Child*>(this)->exit();
+                (new (this) Parent)->leave(target, deep);
+            }
+        }
+        
+        static void enter(typename Parent::MachineType& m, bool deep) {
+            State *&currentState = Parent::currentState(m);
+            if ( typeid(*currentState) != typeid(Child) ) {
+                Parent::enter(m, deep);
+                std::cout << "Enter " << className<Child>() << "\n";
+                (new (currentState) Child)->entry();
+            }
+        }
+        
+        // Default entry/exit handers (do nothing unless non-virtually overridden)
+        void entry() {}
+        void exit() {}
+        
+        // The following types are usinged to create decendents
+        template<typename GrandChild>
+        using SubState = SubState_<Child, GrandChild>;
+        
+        template<typename GrandChild, typename... Regions>
+        using ParallelState = ParallelState_<Child, GrandChild, Regions...>;
+    };
+    
+    template<typename M, typename E>
+    struct Machine_ : E {
+        using BaseState = TopState_<M,E>;
+        using State     = BaseState;
+        
+        State  topState { *this };
+        
+        void start() {
+            M::InitialState::enter(*this, false);
+        }
+        void stop() {
+            topState.self->leave(BaseState(), true);
+        }
+        void handle( void (E::*event)(), const char *eventName ) {
+            topState.self->dispatch(event, eventName);
+        }
+        operator M&() {
+            return *static_cast<M*>(this);
+        }
+        
+        template<typename S>
+        using TopState = SubState_<BaseState,S>;
+    };
+    
+    template<typename E>
+    struct EventList {
+        virtual void handle( void (E::*event)(), const char *eventName ) = 0;
+        
+        template<typename M>
+        using Machine = Machine_<M,E>;
+    };
+}
+
+struct MyEvents : sm::EventList<MyEvents> {
+    virtual void f() { handle(&MyEvents::f, __func__); }
+    virtual void g() { handle(&MyEvents::g, __func__); }
+    virtual void h() { handle(&MyEvents::h, __func__); }
+};
+
+struct MyMachine : MyEvents::Machine<MyMachine> {
+    State s1 { *this };
+    State s2 { *this };
+    
+    struct A : TopState<A> {
+        void f() {
+            std::cout << "A::f()\n";
             transitionTo<D>();
         }
     };
-    
-    struct C : public SubState<Region1::State,C> {
-        void k() {
-            std::cout << "C.k()\n";
-            transitionTo<W>();
-        }
+    struct B : A::SubState<B> {
+        void g() { std::cout << "B::g()\n"; }
     };
-    
-    struct D : public SubMachines<C,D,Region21,Region22> {
-        void entry() {
-            std::cout << "D.entry()\n";
-        }
-        void exit() {
-            std::cout << "D.exit()\n";
+    struct C : A::SubState<C> {
+    };
+    struct D : C::SubState<D> {
+        void f() {
+            std::cout << "D::f()\n";
+            transitionTo<A>();
         }
         void h() {
-            std::cout << "D.h()\n";
+            transitionTo<G>();
         }
+        void entry() { std::cout << "D::in()\n"; }
+        void exit() { std::cout << "D::out()\n"; }
     };
-    
-    struct U : public SubState<Region21::State,U> {
+    struct R1;
+    struct R2;
+    struct G;
+    struct H;
+    struct EE : C::ParallelState<EE,R1,R2> {
+    };
+    struct R1 : EE::Region<R1,&MyMachine::s1> {
+        using InitialState = G;
+    };
+    struct R2 : EE::Region<R2,&MyMachine::s2> {
+        using InitialState = H;
+    };
+    struct G : R1::SubState<G> {
         void f() {
-            std::cout << "U.f()\n";
+            std::cout << "G::f()\n";
         }
-    };
-    
-    struct V : public SubState<U,V> {
         void g() {
-            std::cout << "V.g()\n";
+            transitionTo<D>();
         }
     };
-    
-    struct W : public SubState<U,W> {
-        void g() {
-            std::cout << "W.g()\n";
-        }
+    struct H : R2::SubState<H> {
     };
-    
-    struct X : public SubState<Region22::State,X> {
-    };
+    using InitialState = A;
 };
 
 int main(int argc, const char * argv[]) {
-    MyStateMachine  m;
+    MyMachine m;
     
     m.start();
-    
-    m.f();
-    m.g();
     m.f();
     m.g();
     m.h();
-    m.k();
+    m.f();
+    m.h();
     m.g();
-    
-    m.end();
+    m.h();
+    std::cout << "Stop\n";
+    m.stop();
     
     return 0;
 }
