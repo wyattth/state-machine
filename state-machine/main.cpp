@@ -19,9 +19,9 @@ std::string typeName(const std::type_info& typeInfo) {
 template<typename C> std::string className() { return typeName(typeid(C)); }
 template<typename C> std::string className(C& obj) { return typeName(typeid(obj)); }
 
-namespace sm {
+class sm {
     
-    template<typename P, typename C> struct SubState_;
+    template<typename P, typename C> class SubState_;
     
     template<typename M, typename E>
     struct TopState_ : E {
@@ -87,7 +87,7 @@ namespace sm {
         using E      = typename P::Events;
         template<typename GC, State M::*r>
         using Region = sm::Region_<C,GC,M,State,r>;
-        
+
         template<typename RegionBeingEntered>
         static void enterInnerRegions(M& m, bool deep) {
             C::enter(m,deep);
@@ -117,11 +117,12 @@ namespace sm {
                 R::InitialState::enter(m,false);
             }
         }
-        virtual void leave(const State& s, bool deep) override {
+        virtual void leave(const State& s, bool deep) {
             std::cout << "Stop region1 " << className<R>() << std::endl;
             R::currentState(*this->machine)->leave(s, false);
-            if (deep)
+            if (deep) {
                 super::leave(s, deep);
+            }
         }
         void dispatchToRegions( void (E::*event)(), const char *eventName ) {
             auto* subState = R::currentState(*this->machine);
@@ -140,11 +141,19 @@ namespace sm {
     struct SubState_ : Parent {
         using State = typename Parent::State;
         
+        SubState_() {
+            static_assert( std::is_base_of<SubState_, Child>(),
+                          "Correct Usage: struct MySubState : MySuperStateOrRegion::SubState<MySubState>"
+                          );
+        }
+        
         virtual void leave(const State& target, bool deep) {
             if ( ! dynamic_cast<const Child*>(&target) ) {
                 std::cout << "Exit " << className<Child>() << "\n";
                 static_cast<Child*>(this)->exit();
-                (new (this) Parent)->leave(target, deep);
+                Parent* parent = new (this) Parent;
+                this->self = parent;
+                parent->leave(target, deep);
             }
         }
         
@@ -153,7 +162,9 @@ namespace sm {
             if ( typeid(*currentState) != typeid(Child) ) {
                 Parent::enter(m, deep);
                 std::cout << "Enter " << className<Child>() << "\n";
-                (new (currentState) Child)->entry();
+                Child* child = new (currentState) Child;
+                currentState = child;
+                child->entry();
             }
         }
         
@@ -161,7 +172,7 @@ namespace sm {
         void entry() {}
         void exit() {}
         
-        // The following types are usinged to create decendents
+        // The following Public Types are used to create decendents
         template<typename GrandChild>
         using SubState = SubState_<Child, GrandChild>;
         
@@ -193,14 +204,16 @@ namespace sm {
         using TopState = SubState_<BaseState,S>;
     };
     
+public:
     template<typename E>
-    struct EventList {
+    class EventList {
+    protected:
         virtual void handle( void (E::*event)(), const char *eventName ) = 0;
-        
+    public:
         template<typename M>
         using Machine = Machine_<M,E>;
     };
-}
+};
 
 struct MyEvents : sm::EventList<MyEvents> {
     virtual void f() { handle(&MyEvents::f, __func__); }
