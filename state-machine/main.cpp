@@ -7,7 +7,8 @@
 //
 
 #include <iostream>
-#include <cxxabi.h>  // demangle class names in logs
+#include <functional> // for std::function (used in transaction actions)
+#include <cxxabi.h>   // demangle class names in logs
 
 // Class Names
 std::string typeName(const std::type_info& typeInfo) {
@@ -47,7 +48,7 @@ class sm {
     struct EventWithoutArgs2 : Event<E> {
         void (E::*eventHandler)();
         EventWithoutArgs2(void (E::*event)(), const char *name)
-        : Event<E>(name), eventHandler(event) { }
+            : Event<E>(name), eventHandler(event) { }
         void sendTo(E* target) const { (target->*eventHandler)(); }
     };
     
@@ -55,7 +56,7 @@ class sm {
     struct EventWith1Arg : Event<E> {
         A1 a1;
         EventWith1Arg(A1 a1, const char *name)
-        : Event<E>(name), a1(a1) { }
+            : Event<E>(name), a1(a1) { }
         void sendTo(E* target) const { (target->*eventHandler)(a1); }
     };
     
@@ -64,7 +65,7 @@ class sm {
         A1 a1;
         void (E::*eventHandler)(A1);
         EventWith1Arg2(void (E::*event)(A1), A1 a1, const char *name)
-        : Event<E>(name), eventHandler(event), a1(a1) { }
+            : Event<E>(name), eventHandler(event), a1(a1) { }
         void sendTo(E* target) const { (target->*eventHandler)(a1); }
     };
     
@@ -74,7 +75,7 @@ class sm {
         A1 a1;
         A1 a2;
         EventWith2Args(A1 a1, A2 a2, const char *name)
-        : Event<E>(name), a1(a1), a2(a2) { }
+            : Event<E>(name), a1(a1), a2(a2) { }
         void sendTo(E* target) const { (target->*eventHandler)(a1, a2); }
     };
     
@@ -84,23 +85,43 @@ class sm {
         A2 a2;
         void (E::*eventHandler)(A1, A2);
         EventWith2Args2(void (E::*event)(A1,A2), A1 a1, A2 a2, const char *name)
-        : Event<E>(name), eventHandler(event), a1(a1), a2(a2) { }
+            : Event<E>(name), eventHandler(event), a1(a1), a2(a2) { }
         void sendTo(E* target) const { (target->*eventHandler)(a1, a2); }
     };
     
     
     template<typename M, typename E>
     struct TopState_ : E {
-        using MachineType = M;
-        using State       = TopState_;
-        using Event       = const Event<E>;
-
-        State*       self = this;
-        MachineType* machine;
-        bool         eventWasIgnored;
+        
+        // Clever Trick
+        //
+        // Every state-machine state (e.g. "class MySubState") that is
+        // a sub-state of (e.g. "class MySuperState") has its own
+        // sub-TYPE called "class MySubState::HierarchyPos"
+        // that inherits from "class MySuperState::HierarchyPos"
+        // EVEN IF "class MySubState" DOESN'T INHERIT FROM "class MySuperState"
+        //
+        // This parallel hierarchy is used to test state inheritance across
+        // subRegions, where there is no class inheritance between the states
+        // themselves - i.e...
+        //  - subRegion does NOT inherit from its enclosing superState
+        //  - subRegion::HierarchyPos DOES inherit from superState::HierarchyPos
+        
+        struct StatePos {
+            virtual ~StatePos() {}  // makes polymorphic, allowing dynamic_cast
+        };
+        
+        using MachineType  = M;
+        using State        = TopState_;
+        using Event        = const Event<E>;
+        using HierarchyPos = StatePos;
+        
+        State*       self = this;      // avoids compiler optimization errors
+        MachineType* machine;          // for data members and region-from-type
+        bool         eventWasIgnored;  // controls propogation in sub-regions
         
         virtual void dispatch( Event& event ) {
-            event.sendTo(self);
+            event.sendTo(self);        // by default send event to current state
         }
         virtual void handle( Event& event ) {
             std::cout << "Ignore event " << event.name << std::endl;
@@ -109,15 +130,16 @@ class sm {
         TopState_() { }
         
         template<typename DestinationState>
-        void transitionTo() {
-            leave(DestinationState(), true);
+        void transitionTo( std::function<void()> action = []{} ) {
+            leave(typename DestinationState::HierarchyPos(), true);
+            action();
             DestinationState::enter(*machine, true);
         }
         static State*& currentState(MachineType& machine) {
             return machine.topLevelRegion.self;
         }
         static void enterAncestors(MachineType&, bool) { }
-        virtual void leave(const State&, bool) { }
+        virtual void leave(const StatePos&, bool) { }
     };
     
     template<typename P, typename C, typename M, typename State, State M::* r>
@@ -125,13 +147,14 @@ class sm {
         template<typename GC>
         using SubState  = SubState_<C,GC>;
         using Event     = typename State::Event;
+        struct HierarchyPos : P::HierarchyPos {};
         
         static void enterAncestors(M& m, bool deep) {
             if (deep) {
                 P::template enterInnerRegions<C>(m, deep);
             }
         }
-        virtual void leave(const State& s, bool deep) override {
+        virtual void leave(const typename P::StatePos& s, bool deep) override {
             if (deep) {
                 std::cout << "Leave all regions parallel to " << className<C>() <<"\n";
                 ((P*)P::currentState(*this->machine))->leave(s, deep);
@@ -184,7 +207,7 @@ class sm {
                 R::InitialState::enter(m,false);
             }
         }
-        virtual void leave(const State& s, bool deep) {
+        virtual void leave(const typename P::StatePos& s, bool deep) {
             std::cout << "Stop region1 " << className<R>() << std::endl;
             R::currentState(*this->machine)->leave(s, false);
             if (deep) {
@@ -209,15 +232,15 @@ class sm {
         using Parent = P;
         using State = typename Parent::State;
         using InitialState = Child;
-        
+        struct HierarchyPos : P::HierarchyPos {};
         SubState_() {
             static_assert( std::is_same<Parent, typename Child::Parent>(),
                           "Correct Usage: struct MySubState : MySuperStateOrRegion::SubState<MySubState>"
                           );
         }
         
-        virtual void leave(const State& target, bool deep) {
-            if ( ! dynamic_cast<const Child*>(&target) ) {
+        virtual void leave(const typename P::StatePos& target, bool deep) {
+            if ( ! dynamic_cast<const typename Child::HierarchyPos*>(&target) ) {
                 std::cout << "Exit " << className<Child>() << "\n";
                 static_cast<Child*>(this)->exit();
                 Parent* parent = new (this) Parent;
@@ -271,7 +294,7 @@ class sm {
             M::InitialState::enter(*this, false);
         }
         void stop() {
-            topLevelRegion.self->leave(BaseState(), true);
+            topLevelRegion.self->leave(typename BaseState::HierarchyPos(), true);
         }
         void handle( const Event<E>& f ) {
             topLevelRegion.self->dispatch(f);
@@ -326,13 +349,13 @@ struct MyEvents : sm::EventList<MyEvents> {
 };
 
 struct MyMachine : MyEvents::Machine<MyMachine> {
-    Region s1 { *this };
-    Region s2 { *this };
+    Region r1 { *this };
+    Region r2 { *this };
     
     struct A : TopState<A> {
         void f() override {
             std::cout << "A::f()\n";
-            transitionTo<D>();
+            transitionTo<D>( []{ std::cout << "Flying\n"; } );
         }
     };
     struct B : A::SubState<B> {
@@ -343,13 +366,15 @@ struct MyMachine : MyEvents::Machine<MyMachine> {
     struct C : A::SubState<C> {
     };
     struct D : C::SubState<D> {
+        static void boo() {
+            std::cout << "My Action\n";
+        }
         void f() override {
             std::cout << "D::f()\n";
-            transitionTo<A>();
         }
         void h(int x) override {
             std::cout << "Got h(" << x << ")\n";
-            transitionTo<G>();
+            transitionTo<G>( boo );
         }
         void entry() { std::cout << "D::in()\n"; }
         void exit() { std::cout << "D::out()\n"; }
@@ -361,10 +386,10 @@ struct MyMachine : MyEvents::Machine<MyMachine> {
     struct HH;
     struct EE : C::ParallelState<EE,R1,R2> {
     };
-    struct R1 : EE::Region<R1,&MyMachine::s1> {
+    struct R1 : EE::Region<R1,&MyMachine::r1> {
         using InitialState = G;
     };
-    struct R2 : EE::Region<R2,&MyMachine::s2> {
+    struct R2 : EE::Region<R2,&MyMachine::r2> {
         using InitialState = H;
     };
     struct G : R1::SubState<G> {
