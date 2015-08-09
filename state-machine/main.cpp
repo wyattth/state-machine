@@ -17,8 +17,12 @@ std::string typeName(const std::type_info& typeInfo) {
     free(name);
     return result;
 }
-template<typename C> std::string className() { return typeName(typeid(C)); }
-template<typename C> std::string className(C& obj) { return typeName(typeid(obj)); }
+template<typename C> std::string className() {
+    return typeName(typeid(C));
+}
+template<typename C> std::string className(C& obj) {
+    return typeName(typeid(obj));
+}
 
 class sm {
     
@@ -64,7 +68,8 @@ class sm {
         void sendTo(E* target) const { (target->*eventHandler)(a1); }
     };
     
-    template<typename E, typename A1, typename A2, void (E::*eventHandler)(A1, A2)>
+    template<typename E, typename A1, typename A2,
+             void (E::*eventHandler)(A1, A2)>
     struct EventWith2Args : Event<E> {
         A1 a1;
         A1 a2;
@@ -111,7 +116,7 @@ class sm {
         static State*& currentState(MachineType& machine) {
             return machine.topLevelRegion.self;
         }
-        static void enter(MachineType&, bool) { }
+        static void enterAncestors(MachineType&, bool) { }
         virtual void leave(const State&, bool) { }
     };
     
@@ -121,7 +126,7 @@ class sm {
         using SubState  = SubState_<C,GC>;
         using Event     = typename State::Event;
         
-        static void enter(M& m, bool deep) {
+        static void enterAncestors(M& m, bool deep) {
             if (deep) {
                 P::template enterInnerRegions<C>(m, deep);
             }
@@ -152,7 +157,7 @@ class sm {
 
         template<typename RegionBeingEntered>
         static void enterInnerRegions(M& m, bool deep) {
-            C::enter(m,deep);
+            C::enterAncestors(m,deep);
         }
         
         void dispatchToInnerRegions( Event& event ) {
@@ -199,12 +204,14 @@ class sm {
         }
     };
     
-    template<typename Parent, typename Child>
-    struct SubState_ : Parent {
+    template<typename P, typename Child>
+    struct SubState_ : P {
+        using Parent = P;
         using State = typename Parent::State;
+        using InitialState = Child;
         
         SubState_() {
-            static_assert( std::is_base_of<SubState_, Child>(),
+            static_assert( std::is_same<Parent, typename Child::Parent>(),
                           "Correct Usage: struct MySubState : MySuperStateOrRegion::SubState<MySubState>"
                           );
         }
@@ -219,18 +226,28 @@ class sm {
             }
         }
         
-        static void enter(typename Parent::MachineType& m, bool deep) {
+        static void enterAncestors(typename Parent::MachineType& m, bool deep) {
             State *&currentState = Parent::currentState(m);
             if ( typeid(*currentState) != typeid(Child) ) {
-                Parent::enter(m, deep);
+                Parent::enterAncestors(m, deep);
                 std::cout << "Enter " << className<Child>() << "\n";
                 Child* child = new (currentState) Child;
                 currentState = child;
                 child->entry();
+                if ( ! std::is_same<Child, typename Child::InitialState>() ) {
+                    Child::InitialState::enter(m, deep);
+                }
             }
         }
         
-        // Default entry/exit handers (do nothing unless non-virtually overridden)
+        static void enter(typename Parent::MachineType& m, bool deep) {
+            enterAncestors(m,deep);
+            if ( ! std::is_same<Child, typename Child::InitialState>() ) {
+                Child::InitialState::enter(m, deep);
+            }
+        }
+        
+        // Default entry/exit handlers (does nothing unless non-virtually overridden)
         void entry() {}
         void exit() {}
         
@@ -341,6 +358,7 @@ struct MyMachine : MyEvents::Machine<MyMachine> {
     struct R2;
     struct G;
     struct H;
+    struct HH;
     struct EE : C::ParallelState<EE,R1,R2> {
     };
     struct R1 : EE::Region<R1,&MyMachine::s1> {
@@ -358,6 +376,9 @@ struct MyMachine : MyEvents::Machine<MyMachine> {
         }
     };
     struct H : R2::SubState<H> {
+        using InitialState = HH;
+    };
+    struct HH : H::SubState<HH> {
     };
     using InitialState = A;
 };
