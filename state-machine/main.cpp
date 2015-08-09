@@ -24,92 +24,94 @@ class sm {
     
     template<typename P, typename C> class SubState_;
 
-    // Event functors to pass around (which embed event name and arguement values)
+    // Temporary (const) event functors to pass around
+    // (containing event name and arguement values)
     template<typename E>
     struct Event {
         const char *name;
         Event(const char *name) : name(name) {}
-        virtual void operator()(E*) const = 0;
+        virtual void sendTo(E* target) const = 0;
     };
     
-    template<typename E, void (E::*event)()>
+    template<typename E, void (E::*eventHandler)()>
     struct EventWithoutArgs : Event<E> {
         EventWithoutArgs(const char *name) : Event<E>(name) { }
-        void operator()(E *target) const { (target->*event)(); }
+        void sendTo(E* target) const { (target->*eventHandler)(); }
     };
     
     template<typename E>
     struct EventWithoutArgs2 : Event<E> {
-        void (E::*event)();
+        void (E::*eventHandler)();
         EventWithoutArgs2(void (E::*event)(), const char *name)
-        : Event<E>(name), event(event) { }
-        void operator()(E *target) const { (target->*event)(); }
+        : Event<E>(name), eventHandler(event) { }
+        void sendTo(E* target) const { (target->*eventHandler)(); }
     };
     
-    template<typename E, typename A1, void (E::*event)(A1)>
+    template<typename E, typename A1, void (E::*eventHandler)(A1)>
     struct EventWith1Arg : Event<E> {
         A1 a1;
         EventWith1Arg(A1 a1, const char *name)
         : Event<E>(name), a1(a1) { }
-        void operator()(E *target) const { (target->*event)(a1); }
+        void sendTo(E* target) const { (target->*eventHandler)(a1); }
     };
     
     template<typename E, typename A1>
     struct EventWith1Arg2 : Event<E> {
         A1 a1;
-        void (E::*event)(A1);
+        void (E::*eventHandler)(A1);
         EventWith1Arg2(void (E::*event)(A1), A1 a1, const char *name)
-        : Event<E>(name), event(event), a1(a1) { }
-        void operator()(E *target) const { (target->*event)(a1); }
+        : Event<E>(name), eventHandler(event), a1(a1) { }
+        void sendTo(E* target) const { (target->*eventHandler)(a1); }
     };
     
-    template<typename E, typename A1, typename A2, void (E::*event)(A1, A2)>
+    template<typename E, typename A1, typename A2, void (E::*eventHandler)(A1, A2)>
     struct EventWith2Args : Event<E> {
         A1 a1;
         A1 a2;
         EventWith2Args(A1 a1, A2 a2, const char *name)
         : Event<E>(name), a1(a1), a2(a2) { }
-        void operator()(E *target) const { (target->*event)(a1,a2); }
+        void sendTo(E* target) const { (target->*eventHandler)(a1, a2); }
     };
     
     template<typename E, typename A1, typename A2>
     struct EventWith2Args2 : Event<E> {
         A1 a1;
         A2 a2;
-        void (E::*event)(A1, A2);
+        void (E::*eventHandler)(A1, A2);
         EventWith2Args2(void (E::*event)(A1,A2), A1 a1, A2 a2, const char *name)
-        : Event<E>(name), event(event), a1(a1), a2(a2) { }
-        void operator()(E *target) const { (target->*event)(a1,a2); }
+        : Event<E>(name), eventHandler(event), a1(a1), a2(a2) { }
+        void sendTo(E* target) const { (target->*eventHandler)(a1, a2); }
     };
+    
     
     template<typename M, typename E>
     struct TopState_ : E {
         using MachineType = M;
         using State       = TopState_;
         using Event       = const Event<E>;
-        
-        State* self = this;
-        M*     machine;
-        bool   ignored;
+
+        State*       self = this;
+        MachineType* machine;
+        bool         eventWasIgnored;
         
         virtual void dispatch( Event& event ) {
-            event(this);
+            event.sendTo(self);
         }
         virtual void handle( Event& event ) {
             std::cout << "Ignore event " << event.name << std::endl;
         }
-        TopState_(M& m) : machine(&m) { }
+        TopState_(MachineType& m) : machine(&m) { }
         TopState_() { }
         
-        template<typename D>
+        template<typename DestinationState>
         void transitionTo() {
-            leave(D(), true);
-            D::enter(*machine, true);
+            leave(DestinationState(), true);
+            DestinationState::enter(*machine, true);
         }
-        static State*& currentState(M& m) {
-            return m.topState.self;
+        static State*& currentState(MachineType& machine) {
+            return machine.topLevelRegion.self;
         }
-        static void enter(M&, bool) { }
+        static void enter(MachineType&, bool) { }
         virtual void leave(const State&, bool) { }
     };
     
@@ -134,7 +136,7 @@ class sm {
             return (m.*r).self;
         }
         virtual void handle( Event& event ) override {
-            this->ignored = true;
+            this->eventWasIgnored = true;
             std::cout << "Event " << event.name << "() "
             "ignored by region " << className<C>() << std::endl;
         }
@@ -153,8 +155,8 @@ class sm {
             C::enter(m,deep);
         }
         
-        void dispatchToRegions( Event& event ) {
-            if (this->ignored) {
+        void dispatchToInnerRegions( Event& event ) {
+            if (this->eventWasIgnored) {
                 std::cout << "Event " << event.name << "() was ignored by "
                 "all subregions of " << className<C>() << std::endl;
                 P::dispatch(event);
@@ -169,10 +171,10 @@ class sm {
         using Event = typename P::Event;
         using State = typename P::State;
         
-        template<typename RegionBeingEntered>
+        template<typename RegionAlreadyEntering>
         static void enterInnerRegions(M& m, bool deep) {
-            super::template enterInnerRegions<RegionBeingEntered>(m, deep);
-            if ( ! std::is_same<R, RegionBeingEntered>() ) {
+            super::template enterInnerRegions<RegionAlreadyEntering>(m, deep);
+            if ( ! std::is_same<R, RegionAlreadyEntering>() ) {
                 std::cout << "Start region " << className<R>() << std::endl;
                 R::InitialState::enter(m,false);
             }
@@ -184,16 +186,16 @@ class sm {
                 super::leave(s, deep);
             }
         }
-        void dispatchToRegions( Event& event ) {
+        void dispatchToInnerRegions( Event& event ) {
             auto* subState = R::currentState(*this->machine);
-            subState->ignored = false;
-            event(subState);
-            this->ignored &= subState->ignored;
-            super::dispatchToRegions(event);
+            subState->eventWasIgnored = false;
+            event.sendTo(subState->self);
+            this->eventWasIgnored &= subState->eventWasIgnored;
+            super::dispatchToInnerRegions(event);
         }
         virtual void dispatch( Event& event ) override {
-            this->ignored = true;
-            dispatchToRegions(event);
+            this->eventWasIgnored = true;
+            dispatchToInnerRegions(event);
         }
     };
     
@@ -244,17 +246,18 @@ class sm {
     struct Machine_ : E {
         using BaseState = TopState_<M,E>;
         using State     = BaseState;
+        using Region    = State;
         
-        State  topState { *this };
+        Region  topLevelRegion { *this };
         
         void start() {
             M::InitialState::enter(*this, false);
         }
         void stop() {
-            topState.self->leave(BaseState(), true);
+            topLevelRegion.self->leave(BaseState(), true);
         }
         void handle( const Event<E>& f ) {
-            topState.self->dispatch(f);
+            topLevelRegion.self->dispatch(f);
         }
         operator M&() {
             return *static_cast<M*>(this);
@@ -306,8 +309,8 @@ struct MyEvents : sm::EventList<MyEvents> {
 };
 
 struct MyMachine : MyEvents::Machine<MyMachine> {
-    State s1 { *this };
-    State s2 { *this };
+    Region s1 { *this };
+    Region s2 { *this };
     
     struct A : TopState<A> {
         void f() override {
