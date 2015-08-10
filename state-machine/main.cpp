@@ -90,7 +90,8 @@ class sm {
     };
     
     
-    template<typename M, typename E>
+    template < typename M,    // type of state (M)achine
+               typename E  >  // list of (E)vents supported by state machine
     struct TopState_ : E {
         
         // Clever Trick
@@ -124,13 +125,15 @@ class sm {
             event.sendTo(self);        // by default send event to current state
         }
         virtual void handle( Event& event ) {
-            std::cout << "Ignore event " << event.name << std::endl;
+            std::cout << className<M>() << "." << event.name << "() ignored(!)\n";
         }
         TopState_(MachineType& m) : machine(&m) { }
         TopState_() { }
         
         template<typename DestinationState>
         void transitionTo( std::function<void()> action = []{} ) {
+            std::cout << " " << className(*this) << " -> "
+                << className<DestinationState>() << std::endl;
             leave(typename DestinationState::HierarchyPos(), true);
             action();
             DestinationState::enter(*machine, true);
@@ -142,11 +145,15 @@ class sm {
         virtual void leave(const StatePos&, bool) { }
     };
     
-    template<typename P, typename C, typename M, typename State, State M::* r>
-    struct Region_ : State {
+    template < typename P,   // (P)arent state (i.e. outer state)
+               typename C,   // (C)hild state
+               typename M,   // type of state (M)achine
+               typename S,   // generic (S)tate for this type of state machine
+               S M::*   r >  // pointer to member where (R)egion state is stored
+    struct Region_ : S {
         template<typename GC>
         using SubState  = SubState_<C,GC>;
-        using Event     = typename State::Event;
+        using Event     = typename S::Event;
         struct HierarchyPos : P::HierarchyPos {};
         
         static void enterAncestors(M& m, bool deep) {
@@ -156,21 +163,23 @@ class sm {
         }
         virtual void leave(const typename P::StatePos& s, bool deep) override {
             if (deep) {
-                std::cout << "Leave all regions parallel to " << className<C>() <<"\n";
+                std::cout << className<C>() << " leave all sibling regions\n";
                 ((P*)P::currentState(*this->machine))->leave(s, deep);
             }
         }
-        static State*& currentState(M& m) {
+        static S*& currentState(M& m) {
             return (m.*r).self;
         }
         virtual void handle( Event& event ) override {
             this->eventWasIgnored = true;
-            std::cout << "Event " << event.name << "() "
-            "ignored by region " << className<C>() << std::endl;
+            std::cout << className<C>() << "." << event.name << "() "
+                "ignored by region\n";
         }
     };
     
-    template<typename P, typename C, typename... RR>
+    template < typename    P,    // (P)arent state
+               typename    C,    // (C)hild state
+               typename... RR >  // list of (RR)egions
     struct ParallelState_ : P::template SubState<C> {
         using State  = typename P::State;
         using M      = typename P::MachineType;
@@ -185,14 +194,17 @@ class sm {
         
         void dispatchToInnerRegions( Event& event ) {
             if (this->eventWasIgnored) {
-                std::cout << "Event " << event.name << "() was ignored by "
-                "all subregions of " << className<C>() << std::endl;
+                std::cout << className<C>() << "." << event.name << "() "
+                    "was ignored by all subregions, propagating up...\n";
                 P::dispatch(event);
             }
         }
     };
     
-    template<typename P, typename C, typename R, typename... RR>
+    template < typename    P,    // (P)arent state
+               typename    C,    // (C)hild state
+               typename    R,    // this (R)egion
+               typename... RR >  // other (RR)egions
     struct ParallelState_<P,C,R,RR...> : ParallelState_<P,C,RR...> {
         using super = ParallelState_<P,C,RR...>;
         using M     = typename P::MachineType;
@@ -203,13 +215,15 @@ class sm {
         static void enterInnerRegions(M& m, bool deep) {
             super::template enterInnerRegions<RegionAlreadyEntering>(m, deep);
             if ( ! std::is_same<R, RegionAlreadyEntering>() ) {
-                std::cout << "Start region " << className<R>() << std::endl;
+                std::cout << " " << className<R>() << ".startRegion()...\n";
                 R::InitialState::enter(m,false);
+                std::cout << " " << className<R>() << ".startRegion() done.\n";
             }
         }
         virtual void leave(const typename P::StatePos& s, bool deep) {
-            std::cout << "Stop region1 " << className<R>() << std::endl;
+            std::cout << " " << className<R>() << ".stopRegion()...\n";
             R::currentState(*this->machine)->leave(s, false);
+            std::cout << " " << className<R>() << ".stopRegion() done.\n";
             if (deep) {
                 super::leave(s, deep);
             }
@@ -218,7 +232,8 @@ class sm {
             auto* subState = R::currentState(*this->machine);
             subState->eventWasIgnored = false;
             event.sendTo(subState->self);
-            this->eventWasIgnored = this->eventWasIgnored && subState->eventWasIgnored;
+            this->eventWasIgnored =
+                this->eventWasIgnored && subState->eventWasIgnored;
             super::dispatchToInnerRegions(event);
         }
         virtual void dispatch( Event& event ) override {
@@ -227,46 +242,45 @@ class sm {
         }
     };
     
-    template<typename P, typename Child>
+    template < typename P,   // (P)arent state
+               typename C >  // (C)hild state
     struct SubState_ : P {
-        using Parent = P;
-        using State = typename Parent::State;
-        using InitialState = Child;
+        using Parent       = P;
+        using State        = typename Parent::State;
+        using InitialState = C;
         struct HierarchyPos : P::HierarchyPos {};
         SubState_() {
-            static_assert( std::is_same<Parent, typename Child::Parent>(),
+            static_assert( std::is_same<Parent, typename C::Parent>(),
                           "Correct Usage: struct MySubState : MySuperStateOrRegion::SubState<MySubState>"
                           );
         }
         
         virtual void leave(const typename P::StatePos& target, bool deep) {
-            if ( ! dynamic_cast<const typename Child::HierarchyPos*>(&target) ) {
-                std::cout << "Exit " << className<Child>() << "\n";
-                static_cast<Child*>(this)->exit();
-                Parent* parent = new (this) Parent;
-                this->self = parent;
-                parent->leave(target, deep);
+            if ( ! dynamic_cast<const typename C::HierarchyPos*>(&target) ) {
+                std::cout << "  " << className<C>() << ".exit()\n";
+                static_cast<C*>(this)->exit();       // call any exit method for child state
+                Parent* parent = new (this) Parent;  // new parent state overwrites child state
+                this->self = parent;                 // avoids mistaken compiler optimizations
+                parent->leave(target, deep);         // (recursively) leave (new) parent state
             }
         }
         
         static void enterAncestors(typename Parent::MachineType& m, bool deep) {
             State *&currentState = Parent::currentState(m);
-            if ( typeid(*currentState) != typeid(Child) ) {
-                Parent::enterAncestors(m, deep);
-                std::cout << "Enter " << className<Child>() << "\n";
-                Child* child = new (currentState) Child;
-                currentState = child;
-                child->entry();
-                if ( ! std::is_same<Child, typename Child::InitialState>() ) {
-                    Child::InitialState::enter(m, deep);
-                }
+            if ( typeid(*currentState) != typeid(C) ) {
+                Parent::enterAncestors(m, deep);  // (recursively) enter parent state first
+                std::cout << "  " << className<C>() << ".entry()\n";
+                C* child = new (currentState) C;  // new child state overwrites parent state
+                currentState = child;             // avoids mistaken compiler optimizations
+                child->entry();                   // call any entry method for child state
             }
         }
         
         static void enter(typename Parent::MachineType& m, bool deep) {
             enterAncestors(m,deep);
-            if ( ! std::is_same<Child, typename Child::InitialState>() ) {
-                Child::InitialState::enter(m, deep);
+            if ( ! std::is_same<C, typename C::InitialState>() ) {
+                std::cout << "  " << className<C>() << " has an initial transition...\n";
+                Parent::currentState(m)->template transitionTo<typename C::InitialState>();
             }
         }
         
@@ -275,14 +289,15 @@ class sm {
         void exit() {}
         
         // The following Public Types are used to create decendents
-        template<typename GrandChild>
-        using SubState = SubState_<Child, GrandChild>;
+        template<typename GC>                       // < GC=GrandChild state >
+        using SubState = SubState_<C, GC>;
         
-        template<typename GrandChild, typename... Regions>
-        using ParallelState = ParallelState_<Child, GrandChild, Regions...>;
+        template<typename GC, typename... Regions>  // < GC=GrandChild state >
+        using ParallelState = ParallelState_<C, GC, Regions...>;
     };
     
-    template<typename M, typename E>
+    template < typename M,   // type of state (M)achine
+               typename E >  // list of (E)vents handled by state machine
     struct Machine_ : E {
         using BaseState = TopState_<M,E>;
         using State     = BaseState;
@@ -291,13 +306,20 @@ class sm {
         Region  topLevelRegion { *this };
         
         void start() {
+            std::cout << className<M>() << ".start()...\n";
             M::InitialState::enter(*this, false);
+            std::cout << className<M>() << ".start() done.\n";
         }
         void stop() {
+            std::cout << className<M>() << ".stop()...\n";
             topLevelRegion.self->leave(typename BaseState::HierarchyPos(), true);
+            std::cout << className<M>() << ".stop() done.\n";
         }
-        void handle( const Event<E>& f ) {
-            topLevelRegion.self->dispatch(f);
+        void handle( const Event<E>& event ) {
+            std::string originalState = className(*topLevelRegion.self);
+            std::cout << originalState << "." << event.name << "()...\n";
+            topLevelRegion.self->dispatch(event);
+            std::cout << originalState << "." << event.name << "() done.\n";
         }
         operator M&() {
             return *static_cast<M*>(this);
@@ -308,7 +330,7 @@ class sm {
     };
 
 public:
-    template<typename E>
+    template < typename E >  // list of (E)vents handled
     class EventList {
     protected:
         template<void (E::*event)()>
