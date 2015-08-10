@@ -109,7 +109,7 @@ class sm {
         //  - subRegion::HierarchyPos DOES inherit from superState::HierarchyPos
         
         struct StatePos {
-            virtual ~StatePos() {}  // makes polymorphic, allowing dynamic_cast
+            virtual void dummy() {}  // makes polymorphic, allowing dynamic_cast
         };
         
         using MachineType  = M;
