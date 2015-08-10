@@ -218,7 +218,7 @@ class sm {
             auto* subState = R::currentState(*this->machine);
             subState->eventWasIgnored = false;
             event.sendTo(subState->self);
-            this->eventWasIgnored &= subState->eventWasIgnored;
+            this->eventWasIgnored = this->eventWasIgnored && subState->eventWasIgnored;
             super::dispatchToInnerRegions(event);
         }
         virtual void dispatch( Event& event ) override {
