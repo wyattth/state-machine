@@ -65,7 +65,7 @@ class sm {
         A1 a1;
         void (E::*eventHandler)(A1);
         EventWith1Arg2(void (E::*event)(A1), A1 a1, const char *name)
-            : Event<E>(name), eventHandler(event), a1(a1) { }
+            : Event<E>(name), a1(a1), eventHandler(event) { }
         void sendTo(E* target) const { (target->*eventHandler)(a1); }
     };
     
