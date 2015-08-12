@@ -128,13 +128,16 @@ public:
         
         using MachineType  = M;
         using State        = TopState_;
-//        using Event        = const struct sm::Event<E>;
         using HierarchyPos = StatePos;
         
         State*       self = this;      // avoids compiler optimization errors
         MachineType* machine;          // for data members and region-from-type
         bool         eventWasIgnored;  // controls propogation in sub-regions
-        
+
+        static constexpr bool join = false;
+        static void considerJoining(M&) {}
+        virtual bool wantsToJoin() { return false; }
+
         virtual void dispatch( Event event ) {
             event.sendTo(self);        // by default send event to current state
         }
@@ -167,7 +170,6 @@ public:
     struct Region_ : S {
         template<typename GC>
         using SubState  = SubState_<C,GC>;
-//        using Event     = typename S::Event;
         struct HierarchyPos : P::HierarchyPos {};
         
         static void enterAncestors(M& m, bool deep) {
@@ -189,6 +191,9 @@ public:
             std::cout << className<C>() << "." << event.name << "() "
                 "ignored by region\n";
         }
+        static void considerJoining(M& m) {
+            P::considerJoining(m);
+        }
     };
     
     template < typename    P,    // (P)arent state
@@ -197,10 +202,10 @@ public:
     struct ParallelState_ : P::template SubState<C> {
         using State  = typename P::State;
         using M      = typename P::MachineType;
-//        using Event  = typename P::Event;
         template<typename GC, State M::*r>
         using Region = sm::Region_<C,GC,M,State,r>;
-
+        using JoinTo = C;
+        
         template<typename RegionBeingEntered>
         static void enterInnerRegions(M& m, bool deep) {
             C::enterAncestors(m,deep);
@@ -213,6 +218,11 @@ public:
                 P::dispatch(event);
             }
         }
+        static void considerJoining(M&m) {
+            using target = typename C::JoinTo;
+            std::cout << className<C>() << " joining subregions...\n";
+            P::currentState(m)->template transitionTo<target>();
+        }
     };
     
     template < typename    P,    // (P)arent state
@@ -222,7 +232,6 @@ public:
     struct ParallelState_<P,C,R,RR...> : ParallelState_<P,C,RR...> {
         using super = ParallelState_<P,C,RR...>;
         using M     = typename P::MachineType;
-//        using Event = typename P::Event;
         using State = typename P::State;
         
         template<typename RegionAlreadyEntering>
@@ -253,6 +262,14 @@ public:
         virtual void dispatch( Event event ) override {
             this->eventWasIgnored = true;
             dispatchToInnerRegions(event);
+        }
+        static void considerJoining(M& m) {
+            auto* state = R::currentState(m);
+            if (state->wantsToJoin()) {
+                super::considerJoining(m);
+            } else {
+                std::cout << className(*state) << " does not participate in join\n";
+            }
         }
     };
     
@@ -287,6 +304,10 @@ public:
                 C* child = new (currentState) C;  // new child state overwrites parent state
                 currentState = child;             // avoids mistaken compiler optimizations
                 child->entry();                   // call any entry method for child state
+                if (C::join) {
+                    std::cout << className<C>() << " entered a possible join state\n";
+                    child->considerJoining(m);
+                }
             }
         }
         
@@ -308,6 +329,8 @@ public:
         
         template<typename GC, typename... Regions>  // < GC=GrandChild state >
         using ParallelState = ParallelState_<C, GC, Regions...>;
+        
+        bool wantsToJoin() override { return C::join; }
     };
     
     template < typename    M,   // type of state (M)achine
@@ -420,7 +443,9 @@ struct MyMachine : sm::Machine<MyMachine, MyEvents1, MyEvents2> {
     struct G;
     struct H;
     struct HH;
+    struct HHH;
     struct EE : C::ParallelState<EE,R1,R2> {
+        using JoinTo = B;
     };
     struct R1 : EE::Region<R1,&MyMachine::r1> {
         using InitialState = G;
@@ -435,11 +460,18 @@ struct MyMachine : sm::Machine<MyMachine, MyEvents1, MyEvents2> {
         void g() override {
             transitionTo<D>();
         }
+        static constexpr bool join = true;
     };
     struct H : R2::SubState<H> {
         using InitialState = HH;
     };
     struct HH : H::SubState<HH> {
+        void f() override {
+            transitionTo<HHH>();
+        }
+    };
+    struct HHH : H::SubState<HHH> {
+        static constexpr bool join = true;
     };
     using InitialState = A;
 };
@@ -455,6 +487,7 @@ int main(int argc, const char * argv[]) {
     m.h(3);
     m.g();
     m.h(4);
+    m.f();
     std::cout << "Stop\n";
     m.stop();
     
