@@ -26,73 +26,87 @@ template<typename C> std::string className(C& obj) {
 }
 
 class sm {
-    
+public:
     template<typename P, typename C> class SubState_;
-
+    class BaseEventInterface;
+    
     // Temporary (const) event functors to pass around
     // (containing event name and arguement values)
-    template<typename E>
-    struct Event {
+    struct GenericEvent {
         const char *name;
-        Event(const char *name) : name(name) {}
-        virtual void sendTo(E* target) const = 0;
+        GenericEvent(const char *name) : name(name) {}
+        virtual void sendTo(BaseEventInterface* target) const = 0;
+    };
+
+    typedef const GenericEvent& Event;
+
+    struct BaseEventInterface {
+        virtual void handle(Event event) = 0;
     };
     
-    template<typename E, void (E::*eventHandler)()>
-    struct EventWithoutArgs : Event<E> {
-        EventWithoutArgs(const char *name) : Event<E>(name) { }
-        void sendTo(E* target) const { (target->*eventHandler)(); }
+    template<typename I, void (I::*eventHandler)()>
+    struct EventWithoutArgs : GenericEvent {
+        EventWithoutArgs(const char *name) : GenericEvent(name) { }
+        void sendTo(BaseEventInterface* target) const {
+            (dynamic_cast<I*>(target)->*eventHandler)();
+        }
     };
     
-    template<typename E>
-    struct EventWithoutArgs2 : Event<E> {
-        void (E::*eventHandler)();
-        EventWithoutArgs2(void (E::*event)(), const char *name)
-            : Event<E>(name), eventHandler(event) { }
-        void sendTo(E* target) const { (target->*eventHandler)(); }
+    template<typename I>
+    struct EventWithoutArgs2 : GenericEvent {
+        void (I::*eventHandler)();
+        EventWithoutArgs2(void (I::*event)(), const char *name)
+            : GenericEvent(name), eventHandler(event) { }
+        void sendTo(BaseEventInterface* target) const {
+            (dynamic_cast<I*>(target)->*eventHandler)();
+        }
     };
     
-    template<typename E, typename A1, void (E::*eventHandler)(A1)>
-    struct EventWith1Arg : Event<E> {
+    template<typename I, typename A1, void (I::*eventHandler)(A1)>
+    struct EventWith1Arg : GenericEvent {
         A1 a1;
         EventWith1Arg(A1 a1, const char *name)
-            : Event<E>(name), a1(a1) { }
-        void sendTo(E* target) const { (target->*eventHandler)(a1); }
+            : GenericEvent(name), a1(a1) { }
+        void sendTo(BaseEventInterface* target) const {
+            (dynamic_cast<I*>(target)->*eventHandler)(a1);
+        }
     };
     
-    template<typename E, typename A1>
-    struct EventWith1Arg2 : Event<E> {
+    template<typename I, typename A1>
+    struct EventWith1Arg2 : GenericEvent {
         A1 a1;
-        void (E::*eventHandler)(A1);
-        EventWith1Arg2(void (E::*event)(A1), A1 a1, const char *name)
-            : Event<E>(name), a1(a1), eventHandler(event) { }
-        void sendTo(E* target) const { (target->*eventHandler)(a1); }
+        void (I::*eventHandler)(A1);
+        EventWith1Arg2(void (I::*event)(A1), A1 a1, const char *name)
+            : GenericEvent(name), a1(a1), eventHandler(event) { }
+        void sendTo(BaseEventInterface* target) const {
+            (dynamic_cast<I*>(target)->*eventHandler)(a1);
+        }
     };
     
     template<typename E, typename A1, typename A2,
              void (E::*eventHandler)(A1, A2)>
-    struct EventWith2Args : Event<E> {
+    struct EventWith2Args : GenericEvent {
         A1 a1;
         A1 a2;
         EventWith2Args(A1 a1, A2 a2, const char *name)
-            : Event<E>(name), a1(a1), a2(a2) { }
+            : GenericEvent(name), a1(a1), a2(a2) { }
         void sendTo(E* target) const { (target->*eventHandler)(a1, a2); }
     };
     
     template<typename E, typename A1, typename A2>
-    struct EventWith2Args2 : Event<E> {
+    struct EventWith2Args2 : GenericEvent {
         A1 a1;
         A2 a2;
         void (E::*eventHandler)(A1, A2);
         EventWith2Args2(void (E::*event)(A1,A2), A1 a1, A2 a2, const char *name)
-            : Event<E>(name), eventHandler(event), a1(a1), a2(a2) { }
+            : GenericEvent(name), eventHandler(event), a1(a1), a2(a2) { }
         void sendTo(E* target) const { (target->*eventHandler)(a1, a2); }
     };
     
     
-    template < typename M,    // type of state (M)achine
-               typename E  >  // list of (E)vents supported by state machine
-    struct TopState_ : E {
+    template < typename    M,    // type of state (M)achine
+               typename... E  >  // list of (E)vents supported by state machine
+    struct TopState_ : E... {
         
         // Clever Trick
         //
@@ -114,17 +128,17 @@ class sm {
         
         using MachineType  = M;
         using State        = TopState_;
-        using Event        = const struct sm::Event<E>;
+//        using Event        = const struct sm::Event<E>;
         using HierarchyPos = StatePos;
         
         State*       self = this;      // avoids compiler optimization errors
         MachineType* machine;          // for data members and region-from-type
         bool         eventWasIgnored;  // controls propogation in sub-regions
         
-        virtual void dispatch( Event& event ) {
+        virtual void dispatch( Event event ) {
             event.sendTo(self);        // by default send event to current state
         }
-        virtual void handle( Event& event ) {
+        virtual void handle( Event event ) {
             std::cout << className<M>() << "." << event.name << "() ignored(!)\n";
         }
         TopState_(MachineType& m) : machine(&m) { }
@@ -153,7 +167,7 @@ class sm {
     struct Region_ : S {
         template<typename GC>
         using SubState  = SubState_<C,GC>;
-        using Event     = typename S::Event;
+//        using Event     = typename S::Event;
         struct HierarchyPos : P::HierarchyPos {};
         
         static void enterAncestors(M& m, bool deep) {
@@ -170,7 +184,7 @@ class sm {
         static S*& currentState(M& m) {
             return (m.*r).self;
         }
-        virtual void handle( Event& event ) override {
+        virtual void handle( Event event ) override {
             this->eventWasIgnored = true;
             std::cout << className<C>() << "." << event.name << "() "
                 "ignored by region\n";
@@ -183,7 +197,7 @@ class sm {
     struct ParallelState_ : P::template SubState<C> {
         using State  = typename P::State;
         using M      = typename P::MachineType;
-        using Event  = typename P::Event;
+//        using Event  = typename P::Event;
         template<typename GC, State M::*r>
         using Region = sm::Region_<C,GC,M,State,r>;
 
@@ -192,7 +206,7 @@ class sm {
             C::enterAncestors(m,deep);
         }
         
-        void dispatchToInnerRegions( Event& event ) {
+        void dispatchToInnerRegions( Event event ) {
             if (this->eventWasIgnored) {
                 std::cout << className<C>() << "." << event.name << "() "
                     "was ignored by all subregions, propagating up...\n";
@@ -208,7 +222,7 @@ class sm {
     struct ParallelState_<P,C,R,RR...> : ParallelState_<P,C,RR...> {
         using super = ParallelState_<P,C,RR...>;
         using M     = typename P::MachineType;
-        using Event = typename P::Event;
+//        using Event = typename P::Event;
         using State = typename P::State;
         
         template<typename RegionAlreadyEntering>
@@ -228,7 +242,7 @@ class sm {
                 super::leave(s, deep);
             }
         }
-        void dispatchToInnerRegions( Event& event ) {
+        void dispatchToInnerRegions( Event event ) {
             auto* subState = R::currentState(*this->machine);
             subState->eventWasIgnored = false;
             event.sendTo(subState->self);
@@ -236,7 +250,7 @@ class sm {
                 this->eventWasIgnored && subState->eventWasIgnored;
             super::dispatchToInnerRegions(event);
         }
-        virtual void dispatch( Event& event ) override {
+        virtual void dispatch( Event event ) override {
             this->eventWasIgnored = true;
             dispatchToInnerRegions(event);
         }
@@ -296,10 +310,10 @@ class sm {
         using ParallelState = ParallelState_<C, GC, Regions...>;
     };
     
-    template < typename M,   // type of state (M)achine
-               typename E >  // list of (E)vents handled by state machine
-    struct Machine_ : E {
-        using BaseState = TopState_<M,E>;
+    template < typename    M,   // type of state (M)achine
+               typename... E >  // list of (E)vents handled by state machine
+    struct Machine : E... {
+        using BaseState = TopState_<M,E...>;
         using State     = BaseState;
         using Region    = State;
         
@@ -315,7 +329,7 @@ class sm {
             topLevelRegion.self->leave(typename BaseState::HierarchyPos(), true);
             std::cout << className<M>() << ".stop() done.\n";
         }
-        void handle( const Event<E>& event ) {
+        void handle( Event event ) {
             std::string originalState = className(*topLevelRegion.self);
             std::cout << originalState << "." << event.name << "()...\n";
             topLevelRegion.self->dispatch(event);
@@ -331,7 +345,7 @@ class sm {
 
 public:
     template < typename E >  // list of (E)vents handled
-    class EventList {
+    struct EventInterface : virtual BaseEventInterface {
     protected:
         template<void (E::*event)()>
         void handle(const char *name) {
@@ -356,21 +370,21 @@ public:
         void handle(void (E::*event)(A1,A2), A1 a1, A2 a2, const char *name) {
             handle(EventWith2Args2<E,A1,A2>(event, a1, a2, name));
         }
-        virtual void handle( const Event<E>& f ) = 0;
-    public:
-        template<typename M>
-        using Machine = Machine_<M,E>;
+        virtual void handle( Event f ) = 0;
     };
 };
 
-struct MyEvents : sm::EventList<MyEvents> {
-    virtual void f() { handle(&MyEvents::f, __func__); }
-    virtual void g() { handle<&MyEvents::g>(__func__); }
-    virtual void h(int x) { handle(&MyEvents::h, x, __func__); }
-    virtual void j(int x) { handle<int,&MyEvents::j>(x, __func__); }
+struct MyEvents1 : sm::EventInterface<MyEvents1> {
+    virtual void f() { handle(&MyEvents1::f, __func__); }
+    virtual void g() { handle<&MyEvents1::g>(__func__); }
 };
 
-struct MyMachine : MyEvents::Machine<MyMachine> {
+struct MyEvents2 : sm::EventInterface<MyEvents2> {
+    virtual void h(int x) { handle(&MyEvents2::h, x, __func__); }
+    virtual void j(int x) { handle<int,&MyEvents2::j>(x, __func__); }
+};
+
+struct MyMachine : sm::Machine<MyMachine, MyEvents1, MyEvents2> {
     Region r1 { *this };
     Region r2 { *this };
     
