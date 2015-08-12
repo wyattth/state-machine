@@ -114,7 +114,7 @@ class sm {
         
         using MachineType  = M;
         using State        = TopState_;
-        using Event        = const Event<E>;
+        using Event        = const struct sm::Event<E>;
         using HierarchyPos = StatePos;
         
         State*       self = this;      // avoids compiler optimization errors
