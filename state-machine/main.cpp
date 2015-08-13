@@ -340,7 +340,7 @@ public:
         using State     = BaseState;
         using Region    = State;
         
-        Region  topLevelRegion { *this };
+        Region  topLevelRegion = Region(*this);
         
         void start() {
             std::cout << className<M>() << ".start()...\n";
@@ -408,8 +408,8 @@ struct MyEvents2 : sm::EventInterface<MyEvents2> {
 };
 
 struct MyMachine : sm::Machine<MyMachine, MyEvents1, MyEvents2> {
-    Region r1 { *this };
-    Region r2 { *this };
+    Region r1 = Region(*this);
+    Region r2 = Region(*this);
     
     struct A : TopState<A> {
         void f() override {
