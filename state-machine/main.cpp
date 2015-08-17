@@ -400,7 +400,7 @@ public:
         void handle(void (E::*event)(A1,A2), A1 a1, A2 a2, const char *name) {
             handle(EventWith2Args2<E,A1,A2>(event, a1, a2, name));
         }
-        virtual void handle( Event f ) = 0;
+        virtual void handle( Event f ) {};
     };
 };
 
