@@ -170,6 +170,7 @@ public:
     struct Region_ : S {
         template<typename GC>
         using SubState  = SubState_<C,GC>;
+        using Parent  = P;
         struct HierarchyPos : P::HierarchyPos {};
         
         static void enterAncestors(M& m, bool deep) {
@@ -233,6 +234,12 @@ public:
         using super = ParallelState_<P,C,RR...>;
         using M     = typename P::MachineType;
         using State = typename P::State;
+        
+        ParallelState_() {
+            static_assert( std::is_same<C, typename R::Parent>(),
+                          "Correct Usage: struct MyParallelState : MySuperState::ParallelState<MyParallelState, Region1, Region2..., RegionN>"
+                          );
+        }
         
         template<typename RegionAlreadyEntering>
         static void enterInnerRegions(M& m, bool deep) {
