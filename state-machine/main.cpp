@@ -83,24 +83,28 @@ public:
         }
     };
     
-    template<typename E, typename A1, typename A2,
-             void (E::*eventHandler)(A1, A2)>
+    template<typename I, typename A1, typename A2,
+             void (I::*eventHandler)(A1, A2)>
     struct EventWith2Args : GenericEvent {
         A1 a1;
-        A1 a2;
+        A2 a2;
         EventWith2Args(A1 a1, A2 a2, const char *name)
             : GenericEvent(name), a1(a1), a2(a2) { }
-        void sendTo(E* target) const { (target->*eventHandler)(a1, a2); }
+        void sendTo(BaseEventInterface* target) const {
+            (dynamic_cast<I*>(target)->*eventHandler)(a1,a2);
+        }
     };
     
-    template<typename E, typename A1, typename A2>
+    template<typename I, typename A1, typename A2>
     struct EventWith2Args2 : GenericEvent {
         A1 a1;
         A2 a2;
-        void (E::*eventHandler)(A1, A2);
-        EventWith2Args2(void (E::*event)(A1,A2), A1 a1, A2 a2, const char *name)
-            : GenericEvent(name), eventHandler(event), a1(a1), a2(a2) { }
-        void sendTo(E* target) const { (target->*eventHandler)(a1, a2); }
+        void (I::*eventHandler)(A1, A2);
+        EventWith2Args2(void (I::*event)(A1,A2), A1 a1, A2 a2, const char *name)
+            : GenericEvent(name), a1(a1), a2(a2), eventHandler(event) { }
+        void sendTo(BaseEventInterface* target) const {
+            (dynamic_cast<I*>(target)->*eventHandler)(a1,a2);
+        }
     };
     
     
