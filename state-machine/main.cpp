@@ -250,7 +250,7 @@ public:
                 std::cout << " " << className<R>() << ".startRegion() done.\n";
             }
         }
-        virtual void leave(const typename P::StatePos& s, bool deep) {
+        virtual void leave(const typename P::StatePos& s, bool deep) override {
             std::cout << " " << className<R>() << ".stopRegion()...\n";
             R::currentState(*this->machine)->leave(s, false);
             std::cout << " " << className<R>() << ".stopRegion() done.\n";
@@ -293,7 +293,7 @@ public:
                           );
         }
         
-        virtual void leave(const typename P::StatePos& target, bool deep) {
+        virtual void leave(const typename P::StatePos& target, bool deep) override {
             if ( ! dynamic_cast<const typename C::HierarchyPos*>(&target) ) {
                 std::cout << "  " << className<C>() << ".exit()\n";
                 static_cast<C*>(this)->exit();       // call any exit method for child state
@@ -367,6 +367,15 @@ public:
         }
         operator M&() {
             return *static_cast<M*>(this);
+        }
+
+        template<typename S>
+        bool isInState() {
+            return typeid(*S::template currentState(*(M*)this)) == typeid(S);
+        }
+        template<typename S>
+        bool isInSubStateOf() {
+            return dynamic_cast<S*>(S::template currentState(*(M*)this)) != 0;
         }
         
         template<typename S>
@@ -483,20 +492,52 @@ struct MyMachine : sm::Machine<MyMachine, MyEvents1, MyEvents2> {
     using InitialState = A;
 };
 
+void dumpState(MyMachine& m) {
+    std::cout << "ABCDGH23" << std::endl
+    << m.isInState<MyMachine::A>()
+    << m.isInState<MyMachine::B>()
+    << m.isInState<MyMachine::C>()
+    << m.isInState<MyMachine::D>()
+    << m.isInState<MyMachine::G>()
+    << m.isInState<MyMachine::H>()
+    << m.isInState<MyMachine::HH>()
+    << m.isInState<MyMachine::HHH>() << std::endl
+    << m.isInSubStateOf<MyMachine::A>()
+    << m.isInSubStateOf<MyMachine::B>()
+    << m.isInSubStateOf<MyMachine::C>()
+    << m.isInSubStateOf<MyMachine::D>()
+    << m.isInSubStateOf<MyMachine::G>()
+    << m.isInSubStateOf<MyMachine::H>()
+    << m.isInSubStateOf<MyMachine::HH>()
+    << m.isInSubStateOf<MyMachine::HHH>()
+    << std::endl;
+}
+
 int main(int argc, const char * argv[]) {
     MyMachine m;
     
+    dumpState(m);
     m.start();
+    dumpState(m);
     m.f();
+    dumpState(m);
     m.g();
+    dumpState(m);
     m.h(2);
+    dumpState(m);
     m.f();
+    dumpState(m);
     m.h(3);
+    dumpState(m);
     m.g();
+    dumpState(m);
     m.h(4);
+    dumpState(m);
     m.f();
+    dumpState(m);
     std::cout << "Stop\n";
     m.stop();
+    dumpState(m);
     
     return 0;
 }
