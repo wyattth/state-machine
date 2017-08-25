@@ -87,7 +87,7 @@ public:
              void (E::*eventHandler)(A1, A2)>
     struct EventWith2Args : GenericEvent {
         A1 a1;
-        A1 a2;
+        A2 a2;
         EventWith2Args(A1 a1, A2 a2, const char *name)
             : GenericEvent(name), a1(a1), a2(a2) { }
         void sendTo(E* target) const { (target->*eventHandler)(a1, a2); }
