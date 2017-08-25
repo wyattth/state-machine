@@ -147,8 +147,10 @@ public:
         TopState_(MachineType& m) : machine(&m) { }
         TopState_() { }
         
+        static void doNothing(){};
+        
         template<typename DestinationState>
-        void transitionTo( std::function<void()> action = []{} ) {
+        void transitionTo( std::function<void()> action = &doNothing ) {
             std::cout << " " << className(*this) << " -> "
                 << className<DestinationState>() << std::endl;
             leave(typename DestinationState::HierarchyPos(), true);
